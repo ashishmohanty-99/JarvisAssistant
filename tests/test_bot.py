@@ -241,3 +241,90 @@ def test_agent_tool_list_has_nothing_that_acts():
     forbidden = {"job_apply", "shell_exec", "file_write", "code_interpreter", "apply_patch", "http_request",
                  "channel_send", "git_tool", "docker_shell_exec", "repl", "db_query"}
     assert not forbidden & set(botmod.AGENT_TOOLS)
+
+
+# ---- resume by file, and /doctor
+
+
+def _serve_file(router, content, path="documents/file_9.pdf"):
+    router.post(f"{BASE}/getFile").mock(return_value=httpx.Response(200, json={"ok": True, "result": {"file_path": path}}))
+    router.get(f"https://api.telegram.org/file/bot{TOKEN}/{path}").mock(return_value=httpx.Response(200, content=content))
+
+
+def _pdf(text: str) -> bytes:
+    """A one-page PDF holding *text*, built with pypdf's writer-free minimal syntax."""
+    lines = text.splitlines()
+    stream = "BT /F1 11 Tf 40 780 Td 14 TL " + " ".join(f"({line}) Tj T*" for line in lines) + " ET"
+    objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out, offsets = "%PDF-1.4\n", []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n{body}\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n" + "".join(f"{o:010d} 00000 n \n" for o in offsets)
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
+    return out.encode("latin-1")
+
+
+RESUME_PDF = _pdf("Asha Rao\nasha.rao@example.com\nEngineering Manager. Python, AWS, Kafka.")
+
+
+def test_owner_sends_a_pdf_and_it_becomes_the_resume(telegram):
+    pytest.importorskip("pypdf")
+    from jarvis_sidekick import common, paths
+
+    _serve_file(telegram, RESUME_PDF)
+    _bot().process(_message(update_id=3) | {"message": _message()["message"] | {
+        "document": {"file_id": "d1", "file_name": "My CV.pdf", "file_size": len(RESUME_PDF)}}})
+    reply = _texts(telegram)[-1]
+    assert reply.startswith("Resume saved. Name, email found; 4 skills recognised: Python, Kafka, AWS, Engineering Management")
+    saved = paths.home() / "resume.pdf"
+    assert saved.read_bytes() == RESUME_PDF and oct(saved.stat().st_mode & 0o777) == "0o600"
+    assert common.resume_profile().email == "asha.rao@example.com"  # used with no SIDEKICK_RESUME set
+    assert common.resume_profile().name == "Asha Rao" and common.resume_profile().phone == ""
+
+
+@pytest.mark.parametrize(
+    "content, name, size, why",
+    [
+        (b"MZ\x90\x00 not a document", "resume.pdf", 30, "PDF or a .docx"),  # a program renamed to .pdf
+        (b"PK\x03\x04 zip archive", "payload.zip", 30, "PDF or a .docx"),
+        (RESUME_PDF, "huge.pdf", 99_000_000, "limited to 5 MB"),
+        (_pdf("No contact details here"), "empty.pdf", 400, "could not find a name and an email"),
+    ],
+)
+def test_files_that_are_not_a_usable_resume_are_refused_and_nothing_is_kept(telegram, content, name, size, why):
+    pytest.importorskip("pypdf")
+    from jarvis_sidekick import paths
+
+    _serve_file(telegram, content)
+    _bot().process({"update_id": 4, "message": _message()["message"] | {
+        "document": {"file_id": "d1", "file_name": name, "file_size": size}}})
+    assert why in _texts(telegram)[-1]
+    assert [p.name for p in paths.home().iterdir() if "resume" in p.name] == []
+
+
+def test_a_stranger_cannot_replace_the_resume(telegram):
+    from jarvis_sidekick import paths
+
+    _serve_file(telegram, RESUME_PDF)
+    bot = _bot()
+    bot.process({"update_id": 5, "message": _message(chat_id=999, sender=999)["message"] | {
+        "document": {"file_id": "d1", "file_name": "cv.pdf", "file_size": 10}}})
+    assert bot.dropped == 1 and not telegram.sent.called and not (paths.home() / "resume.pdf").exists()
+
+
+def test_doctor_command_reports_without_touching_telegram_itself(monkeypatch):
+    from jarvis_sidekick import doctor
+
+    monkeypatch.setattr(doctor, "run", lambda offline=False: [
+        doctor.Check("news feeds", doctor.OK, "12 headlines"), doctor.Check("Telegram bot", doctor.OK, "x"),
+        doctor.Check("jobs: remoteok", doctor.FAIL, "HTTP 503")])
+    reply = Commander().handle("/doctor")
+    assert reply == "ok  news feeds: 12 headlines\nFAIL  jobs: remoteok: HTTP 503\n\n1 failed"

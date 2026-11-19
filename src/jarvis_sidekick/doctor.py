@@ -46,10 +46,12 @@ def _need(*names: str) -> None:
 
 
 def _resume() -> str:
-    _need("SIDEKICK_RESUME")
-    from jarvis_sidekick import resume
+    from jarvis_sidekick import common, resume
 
-    profile = resume.load(os.environ["SIDEKICK_RESUME"])
+    path = os.environ.get("SIDEKICK_RESUME") or common.stored_resume()
+    if not path:
+        raise _Skip("send your resume to the bot as a PDF, or set SIDEKICK_RESUME")
+    profile = resume.load(path)
     if not (profile.name and profile.email):
         raise ValueError("could not find a name and an email in the resume")
     return f"name, email{', phone' if profile.phone else ''} found; {len(profile.skills)} skills recognised"

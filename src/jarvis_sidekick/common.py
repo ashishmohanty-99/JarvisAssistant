@@ -10,10 +10,19 @@ from jarvis_sidekick.profile import github
 
 
 def resume_profile(path: str = "") -> resume.Profile:
-    path = path or os.environ.get("SIDEKICK_RESUME", "")
+    path = path or os.environ.get("SIDEKICK_RESUME", "") or stored_resume()
     if not path:
-        raise ValueError("No resume given. Pass resume_path or set SIDEKICK_RESUME.")
+        raise ValueError("No resume yet. Send the PDF to your bot, or set SIDEKICK_RESUME.")
     return resume.load(path)
+
+
+def stored_resume() -> str:
+    """The resume kept in the state folder (put there by sending the file to the bot), or ''."""
+    for name in ("resume.pdf", "resume.docx"):
+        candidate = paths.home() / name
+        if candidate.exists():
+            return str(candidate)
+    return ""
 
 
 def load_answers() -> dict[str, str]:

@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 API = "https://api.telegram.org"
 MAX_VOICE_SECONDS = 120
 MAX_VOICE_BYTES = 5_000_000
+MAX_RESUME_BYTES = 5_000_000
 MAX_TEXT_CHARS = 2000
 RATE_LIMIT = 20  # messages per minute
 CODE_TTL_SECONDS = 300
@@ -57,6 +58,8 @@ HELP = """Commands (type them, or say them in a voice note):
 /confirm <code> - send that application (typed only)
 /status - your applications
 /channel - your YouTube channel's recent videos and views
+/doctor - check every connection (prices, news, jobs, voice, browser)
+Send a PDF or .docx to set the resume you apply with.
 /plan <monthly> <years> [conservative|moderate|aggressive]
 Anything else is answered by Jarvis."""
 
@@ -99,7 +102,7 @@ class Commander:
         handler = {
             "/start": lambda _: HELP, "/help": lambda _: HELP, "/brief": self._brief, "/screen": self._screen,
             "/jobs": self._jobs, "/apply": self._apply, "/status": self._status, "/plan": self._plan,
-            "/channel": self._channel,
+            "/channel": self._channel, "/doctor": self._doctor,
         }.get(name)
         if handler is None:
             return "Unknown command.\n" + HELP
@@ -208,6 +211,13 @@ class Commander:
             return "No applications yet."
         return "\n".join(f"{r['updated_at'][:10]} {r['status']}: {r['title']} @ {r['company']} ({r['job_id']})"
                          for r in rows[:20])
+
+    def _doctor(self, _: str) -> str:
+        from jarvis_sidekick import doctor
+
+        checks = [c for c in doctor.run() if c.name not in ("Telegram bot", "microphone", "env file")]
+        failed = sum(1 for c in checks if c.status == doctor.FAIL)
+        return "\n".join([*(f"{c.status}  {c.name}: {c.detail}" for c in checks), "", f"{failed} failed"])
 
     def _channel(self, _: str) -> str:
         if not self.channel_id:
@@ -318,24 +328,59 @@ class Bot:
         self._recent.append(now)
         return len(self._recent) > RATE_LIMIT
 
-    def _voice_text(self, voice: dict) -> str:
-        if int(voice.get("duration") or 0) > MAX_VOICE_SECONDS or int(voice.get("file_size") or 0) > MAX_VOICE_BYTES:
-            raise ValueError(f"voice notes are limited to {MAX_VOICE_SECONDS} seconds")
-        path = self._call("getFile", json={"file_id": voice["file_id"]})["result"].get("file_path", "")
+    def _download(self, file_id: str, max_bytes: int) -> bytes:
+        path = self._call("getFile", json={"file_id": file_id})["result"].get("file_path", "")
         if not re.fullmatch(r"[\w/.-]{1,200}", path) or ".." in path:
             raise ValueError("unexpected file path from Telegram")
         try:
             response = self._client.get(f"{API}/file/bot{self._token}/{path}")
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise TelegramError(f"voice download failed ({type(exc).__name__})") from None
-        if len(response.content) > MAX_VOICE_BYTES:
-            raise ValueError("voice note is too large")
+            raise TelegramError(f"download failed ({type(exc).__name__})") from None
+        if len(response.content) > max_bytes:
+            raise ValueError("file is too large")
+        return response.content
+
+    def _voice_text(self, voice: dict) -> str:
+        if int(voice.get("duration") or 0) > MAX_VOICE_SECONDS or int(voice.get("file_size") or 0) > MAX_VOICE_BYTES:
+            raise ValueError(f"voice notes are limited to {MAX_VOICE_SECONDS} seconds")
+        audio = self._download(voice["file_id"], MAX_VOICE_BYTES)
         if self._transcribe is None:
             from jarvis_sidekick.speech.elevenlabs_stt import ElevenLabsSpeechBackend
 
-            return ElevenLabsSpeechBackend().transcribe(response.content, format="ogg").text
-        return self._transcribe(response.content)
+            return ElevenLabsSpeechBackend().transcribe(audio, format="ogg").text
+        return self._transcribe(audio)
+
+    def _save_resume(self, document: dict) -> str:
+        """Store a PDF or DOCX the owner sent as the resume to apply with. Checked by content, not by name."""
+        if int(document.get("file_size") or 0) > MAX_RESUME_BYTES:
+            raise ValueError("resumes are limited to 5 MB")
+        data = self._download(document["file_id"], MAX_RESUME_BYTES)
+        if data.startswith(b"%PDF-"):
+            suffix = ".pdf"
+        elif data.startswith(b"PK\x03\x04") and str(document.get("file_name", "")).lower().endswith(".docx"):
+            suffix = ".docx"
+        else:
+            raise ValueError("send the resume as a PDF or a .docx file")
+        target = paths.home() / f"resume{suffix}"
+        staged = paths.home() / f"incoming-resume{suffix}"  # keeps the real suffix so it is parsed as that type
+        staged.write_bytes(data)
+        staged.chmod(0o600)
+        try:
+            from jarvis_sidekick import resume
+
+            profile = resume.load(staged)
+            if not (profile.name and profile.email):
+                raise ValueError("could not find a name and an email in it; the old resume is kept")
+        except (ValueError, RuntimeError, OSError):
+            staged.unlink(missing_ok=True)
+            raise
+        for old in ("resume.pdf", "resume.docx"):
+            (paths.home() / old).unlink(missing_ok=True)
+        staged.replace(target)
+        return (f"Resume saved. Name, email{', phone' if profile.phone else ''} found; "
+                f"{len(profile.skills)} skills recognised: {', '.join(profile.skills[:12])}"
+                f"{' ...' if len(profile.skills) > 12 else ''}")
 
     def process(self, update: dict) -> None:
         message = update.get("message")
@@ -345,6 +390,12 @@ class Bot:
             return
         if self._rate_limited():
             self.send("Slow down: too many messages this minute.")
+            return
+        if isinstance(message.get("document"), dict):
+            try:
+                self.send(self._save_resume(message["document"]))
+            except (TelegramError, ValueError, RuntimeError, OSError) as exc:
+                self.send(f"Could not use that file: {exc}")
             return
         spoken = isinstance(message.get("voice"), dict)
         try:
