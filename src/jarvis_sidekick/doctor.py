@@ -171,7 +171,7 @@ def _microphone() -> str:
     try:
         import sounddevice
     except (ImportError, OSError):
-        raise _Skip("pip install 'jarvis-sidekick[voice]' for `sidekick voice`") from None
+        raise _Skip("no audio library; pip install 'jarvis-sidekick[voice]' (only needed for `sidekick voice`)") from None
     inputs = [d for d in sounddevice.query_devices() if d.get("max_input_channels", 0) > 0]
     if not inputs:
         raise RuntimeError("no input device; on macOS allow the terminal under Privacy & Security > Microphone")
