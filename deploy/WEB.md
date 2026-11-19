@@ -61,7 +61,7 @@ The Tailscale steps are written from memory of its documentation and have not be
 ## Turning it off
 
 ```bash
-tailscale serve --bg off 2>/dev/null || tailscale serve reset
+tailscale serve --https=443 off
 sed -i "s|^SIDEKICK_WEB_PORT=.*|SIDEKICK_WEB_PORT=|" /etc/jarvis-sidekick/env
 systemctl restart jarvis-sidekick
 ```
