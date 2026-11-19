@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0d">
+<title>Jarvis</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main id="login" hidden>
+  <div class="login-card">
+    <div class="wordmark">JARVIS</div>
+    <p id="login-hint">This screen answers to one person. I will send a sign-in code to your Telegram.</p>
+    <button id="send-code" class="primary">Send me a code</button>
+    <form id="code-form" hidden>
+      <label for="code">Code from Telegram</label>
+      <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required>
+      <button class="primary">Sign in</button>
+    </form>
+    <p id="login-error" class="error" role="alert"></p>
+  </div>
+</main>
+
+<main id="app" hidden>
+  <header>
+    <div class="wordmark">JARVIS</div>
+    <div id="greeting" class="greeting"></div>
+    <button id="sign-out" class="quiet">Sign out</button>
+  </header>
+
+  <section class="stage">
+    <button id="orb" class="orb" aria-label="Hold to talk">
+      <canvas id="orb-canvas" width="520" height="520"></canvas>
+    </button>
+    <div id="status" class="status" role="status" aria-live="polite">Hold the orb and speak</div>
+    <div id="chips" class="chips"></div>
+    <form id="say-form" class="say">
+      <label for="say" class="visually-hidden">Type a request</label>
+      <input id="say" autocomplete="off" placeholder="Or type: where should I invest 25000">
+      <button class="primary" aria-label="Send">Send</button>
+    </form>
+  </section>
+
+  <section class="talk" aria-label="Conversation">
+    <div id="log" class="log"></div>
+  </section>
+
+  <aside class="board" aria-label="Markets and headlines">
+    <h2>Markets <span id="as-of" class="muted"></span></h2>
+    <div id="tiles" class="tiles"></div>
+    <h2>Headlines</h2>
+    <ul id="headlines" class="headlines"></ul>
+  </aside>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

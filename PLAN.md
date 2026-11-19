@@ -29,10 +29,11 @@ Goal: one assistant you talk to that reads the web, hunts jobs against your resu
 - [x] Deployment: macOS login service; one-command Ubuntu server install with a restricted system service; Docker files
 - [x] Resume by sending the file to the bot; `/doctor` from the phone
 - [x] `/invest`: a rule-based split of a sum into funds and stock ideas with quantities, asked with buttons
+- [x] The Jarvis screen: orb, push-to-talk voice, spoken answers, buttons and a live market board, behind a private network and a Telegram sign-in code
 - [x] The briefing as a designed PDF edition (`/paper`), optionally every morning
 - [x] One-tap YouTube publishing of a video sent to the bot (stage 1)
 - [x] Conversation through Claude with read-only tools, memory, tap buttons, typing indicator, optional morning message
-- [x] Nine OpenJarvis tools; 178 tests; lint clean; `SECURITY.md` threat table
+- [x] Nine OpenJarvis tools; 193 tests; lint clean; `SECURITY.md` threat table
 
 ### Phase 2: first live run (needs your keys and machine)
 - [ ] Run each command against the live services and fix any parser drift (ElevenLabs, job APIs, Yahoo, feeds, YouTube)

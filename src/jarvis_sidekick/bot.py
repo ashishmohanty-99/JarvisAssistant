@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -88,6 +89,18 @@ class Pending:
 
 
 @dataclass
+class Exchange:
+    """One answer and what travels with it."""
+
+    reply: str
+    say: str
+    choices: list[str]
+    had_choices: bool
+    attachment: Path | None
+    action: Callable[[], None] | None
+
+
+@dataclass
 class Commander:
     """Turns one message into one reply. Holds no network state, so it is easy to test."""
 
@@ -108,7 +121,20 @@ class Commander:
     _invest: dict | None = field(default=None, init=False)
     _awaiting_video_text: bool = field(default=False, init=False)
     _attachment: Path | None = field(default=None, init=False)
+    _lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
     youtube_login: publish.DeviceLogin | None = field(default=None, init=False)
+
+    def exchange(self, text: str, *, spoken: bool = False) -> Exchange:
+        """Answer one message and collect everything that goes with the answer, as one uninterrupted step.
+
+        Telegram and the web page share one Commander; the lock keeps one channel's answer buttons,
+        spoken text and attachment from being picked up by the other.
+        """
+        with self._lock:
+            had_choices = bool(self.choices)
+            reply = self.handle(text, spoken=spoken)
+            return Exchange(reply=reply, say=self.say or reply, choices=list(self.choices), had_choices=had_choices,
+                            attachment=self.take_attachment(), action=self.take_action())
 
     def handle(self, text: str, *, spoken: bool = False) -> str:
         """Answer one message. Afterwards ``self.say`` holds a short version fit for speaking aloud."""
@@ -789,20 +815,18 @@ class Bot:
         if spoken:
             self.send(f"Heard: {text}")
         self._typing()
-        had_choices = bool(self._commander.choices)
-        reply = self._commander.handle(text, spoken=spoken)
-        self.send(reply, choices=self._commander.choices,
-                  buttons=had_choices or text.strip().lower().split("@")[0] in ("/start", "/help"))
-        self._send_attachment()
-        action = self._commander.take_action()
-        if action:
-            action()
+        answer = self._commander.exchange(text, spoken=spoken)
+        self.send(answer.reply, choices=answer.choices,
+                  buttons=answer.had_choices or text.strip().lower().split("@")[0] in ("/start", "/help"))
+        self._send_attachment(answer.attachment)
+        if answer.action:
+            answer.action()
             return
         if spoken and self._speak:
-            self._say(self._commander.say or reply)
+            self._say(answer.say)
 
-    def _send_attachment(self) -> None:
-        attachment = self._commander.take_attachment()
+    def _send_attachment(self, attachment: Path | None = None) -> None:
+        attachment = attachment or self._commander.take_attachment()
         if attachment is None:
             return
         self._call("sendDocument", data={"chat_id": str(self._owner)},
@@ -872,4 +896,13 @@ def from_env(*, speak: bool = False) -> Bot:
         channel_id=commander.channel_id, locations=commander.locations,
     )
     commander.agent = commander.brain.ask if commander.brain else jarvis_agent()
-    return Bot(os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", ""), commander, speak=speak)
+    bot = Bot(os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", ""), commander, speak=speak)
+    port = os.environ.get("SIDEKICK_WEB_PORT", "").strip()
+    if port:
+        from jarvis_sidekick import web
+
+        if not port.isdigit() or not 1024 <= int(port) <= 65535:
+            raise ValueError("SIDEKICK_WEB_PORT must be a port number between 1024 and 65535")
+        web.serve(web.from_env(commander, bot.send), int(port))
+        logger.info("Jarvis screen listening on http://127.0.0.1:%s", port)
+    return bot
