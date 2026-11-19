@@ -144,6 +144,8 @@ class WebApp:
             return {"reply": f"{command or text} is done in Telegram, {self.commander.title}: it acts outside this "
                              "screen, so it needs your typed word there.", "choices": []}
         answer = self.commander.exchange(text, spoken=spoken)
+        # One line per request in the server log, so "it did something odd" can be traced afterwards.
+        logger.info("screen %s: %r -> %r", "heard" if spoken else "typed", text[:120], answer.reply[:80])
         result: dict[str, Any] = {"reply": answer.reply, "choices": answer.choices, "asleep": self.commander.asleep}
         # An action (powering off) can only come from a typed Telegram command; it is never run from here.
         if answer.attachment is not None:

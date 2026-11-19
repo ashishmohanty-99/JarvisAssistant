@@ -121,6 +121,7 @@ class Commander:
     _invest: dict | None = field(default=None, init=False)
     _awaiting_video_text: bool = field(default=False, init=False)
     _attachment: Path | None = field(default=None, init=False)
+    _misses: int = field(default=0, init=False)
     _lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
     youtube_login: publish.DeviceLogin | None = field(default=None, init=False)
 
@@ -262,9 +263,40 @@ class Commander:
     def _ask(self, text: str) -> str:
         if not text:
             return HELP
-        if self.agent is None:
-            return "I only know commands until a language model is configured (ANTHROPIC_API_KEY).\n" + HELP
-        return self.agent(text)
+        if self.agent is not None:
+            return self.agent(text)
+        small = self._small_talk(text)
+        if small:
+            return small
+        # Not a command it knows. Say so briefly, differently each time, and offer what it can do:
+        # hearing the same long list after every miss is what makes a fixed-command assistant feel broken.
+        self._misses += 1
+        opener = (f"I did not find a command in that, {self.title}.", "That is not something I know how to do yet.",
+                  f"I am not sure what you need, {self.title}.")[self._misses % 3]
+        self.choices = ["Market briefing", "Where to invest", "News PDF"]
+        return f"{opener} {_CAN_DO}"
+
+    def _small_talk(self, text: str) -> str | None:
+        """Short human replies to greetings, thanks and a few simple questions. No model: fixed phrases."""
+        said = text.lower().strip(" .!?")
+        now = self.now()
+        if re.fullmatch(r"(?:hi|hello|hey|hey there|good (?:morning|afternoon|evening|day))(?: jarvis)?", said):
+            return f"{self.greeting()}, {self.title}. What do you need?"
+        if re.search(r"\b(?:thanks|thank you|well done|good job|great|perfect|nice)\b", said) and len(said) < 40:
+            return f"Always, {self.title}."
+        if re.search(r"\bhow are you\b|\bhow(?:'s| is) it going\b", said):
+            return f"All systems running, {self.title}. What do you need?"
+        if re.search(r"\bwhat(?:'s| is)? (?:the )?time\b|\btime is it\b", said):
+            return f"It is {now:%H:%M}, {self.title}."
+        if re.search(r"\bwhat(?:'s| is)? (?:the |today's )?(?:date|day)\b|\bwhat day\b", said):
+            return f"It is {now:%A}, {now.day} {now:%B %Y}."
+        if re.search(r"\bwho are you\b|\byour name\b", said):
+            return f"I am Jarvis, {self.title}. {_CAN_DO}"
+        if re.search(r"\bwhat can you do\b|\bwhat do you do\b|\byour (?:commands|options|skills)\b|\bhelp me\b", said):
+            return _CAN_DO
+        if re.fullmatch(r"(?:ok|okay|yes|no|nothing|never ?mind|cancel|stop|that's it|that is it)", said):
+            return f"Very well, {self.title}."
+        return None
 
     # ---- YouTube: connect once, then publish each video you send with one tap
 
@@ -480,7 +512,8 @@ class Commander:
 
     def _jobs(self, rest: str) -> str:
         if not rest:
-            return "Usage: /jobs <role> [in <place, place>]"
+            self.choices = ["Find engineering manager jobs", "Find director of engineering jobs"]
+            return f"Which role, {self.title}? Say, for example: find engineering manager jobs."
         query, _, where = rest.partition(" in ")
         where = where.strip() or self.locations
         profile = common.resume_profile(self.resume_path)
@@ -592,6 +625,8 @@ _KEYBOARD = {"keyboard": [[{"text": "News PDF"}, {"text": "Market briefing"}],
              "resize_keyboard": True, "is_persistent": True}
 PUBLISH_CHOICES = {"Publish public": "/publish public", "Upload private": "/publish private", "Skip": "/skip"}
 _INVEST_WHEN = {"one time": False, "once": False, "lump sum": False, "every month": True, "monthly": True}
+_CAN_DO = ("I can give you the market briefing, suggest where to invest a sum, send the news as a PDF, "
+           "find jobs for a role, and show your applications or your channel.")
 POWEROFF_REQUEST = "poweroff.request"  # watched by a root-owned systemd unit on the server install
 
 
@@ -608,11 +643,17 @@ _SPOKEN = (
     # Money questions come first: "give me the brief and tell me where to invest 25k" is about investing.
     (re.compile(r"^(.*\b(?:invest(?:ing|ment)?|put (?:my |the |some )?money|stocks? to (?:buy|invest|put))\b.*)$",
                 re.IGNORECASE), "/invest {0}"),
+    (re.compile(r"^(.*\b(?:stocks?|shares?|what (?:should|can|do) i buy|recommend(?:ation)?s?|portfolio|mutual funds?|sip)\b.*)$",
+                re.IGNORECASE), "/invest {0}"),
     (re.compile(r"^(?:give me |send |get )?(?:the |my |a )?(?:market |morning |daily )?brief(?:ing)?\b.*", re.IGNORECASE), "/brief"),
+    (re.compile(r"^.*\b(?:markets?|nifty|sensex|indices|index|dow|nasdaq|rupee|gold price)\b.*$", re.IGNORECASE), "/brief"),
+    (re.compile(r"^.*\b(?:my )?applications?\b.*$", re.IGNORECASE), "/status"),
     (re.compile(r"^(?:show |get )?(?:my )?(?:application )?status\b.*", re.IGNORECASE), "/status"),
     (re.compile(r"^(?:find|search|look for)(?: me)?(?: some)? (?:jobs? (?:for|as) )?(.+?)(?: jobs?)?$", re.IGNORECASE), "/jobs {0}"),
     (re.compile(r"^screen (india|us|etf)\b.*", re.IGNORECASE), "/screen {0}"),
     (re.compile(r"^(?:how is |how's |show )?my (?:youtube )?channel\b.*", re.IGNORECASE), "/channel"),
+    (re.compile(r"^.*\b(?:youtube|channel|views|subscribers)\b.*$", re.IGNORECASE), "/channel"),
+    (re.compile(r"^.*\bjobs?\b.*$", re.IGNORECASE), "/jobs"),
     (re.compile(r"^help\b.*", re.IGNORECASE), "/help"),
 )
 

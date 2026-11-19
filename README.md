@@ -170,7 +170,7 @@ Nobody can. The working pattern is: search for what you need (OpenJarvis `web_se
 
 ## Verified, and not yet
 
-Verified by the test suite (`pytest`, 193 tests): the ElevenLabs request format and response parsing against the documented API shape; registration into a real OpenJarvis install and resolution through its speech discovery and tool executor; the form filler against a real Chromium and a local stand-in form (dry run sends nothing, confirm sends, unanswered questions and CAPTCHAs block); scoring, tracker, indicators, plan arithmetic, feed parsing, error paths that must not leak keys; the bot's owner check, backlog skip, rate limit, voice-note limits and one-time confirmation codes.
+Verified by the test suite (`pytest`, 205 tests): the ElevenLabs request format and response parsing against the documented API shape; registration into a real OpenJarvis install and resolution through its speech discovery and tool executor; the form filler against a real Chromium and a local stand-in form (dry run sends nothing, confirm sends, unanswered questions and CAPTCHAs block); scoring, tracker, indicators, plan arithmetic, feed parsing, error paths that must not leak keys; the bot's owner check, backlog skip, rate limit, voice-note limits and one-time confirmation codes.
 
 Run live on an Ubuntu 24.04 cloud server through `/doctor` (19 November 2026): the Telegram bot under its restricted system service, resume upload through the bot, ElevenLabs speech out and back in, Yahoo prices, the news feeds, the Remotive, Arbeitnow and RemoteOK job sources, the YouTube channel feed, and Chromium start-up.
 

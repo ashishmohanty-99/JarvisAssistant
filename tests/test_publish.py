@@ -221,8 +221,8 @@ def test_voice_strangers_and_oversized_files_cannot_publish(google):
     bot = _bot_and_router(google, commander)
     bot.process(_update(video={"file_id": "v1", "file_size": len(MP4)}, caption=GOOD_TEXT))
 
-    assert commander.handle("Publish public", spoken=True).startswith("I only know commands")  # heard, not tapped
-    assert commander.handle("/publish public", spoken=True).startswith("I only know commands")
+    assert "I can give you the market briefing" in commander.handle("Publish public", spoken=True)  # heard, not tapped
+    assert "I can give you the market briefing" in commander.handle("/publish public", spoken=True)
     bot.process(_update(2, sender=999, text="Publish public"))
     assert bot.dropped == 1 and publish.Draft.load() is not None
 

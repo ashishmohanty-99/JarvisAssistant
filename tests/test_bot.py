@@ -169,7 +169,8 @@ def test_plan_and_unknown_commands():
     assert "Rs 3,500" in commander.handle("/plan 10000 10")
     assert commander.handle("/plan abc 10").startswith("/plan failed")
     assert commander.handle("/rm -rf").startswith("Unknown command")
-    assert "I only know commands" in commander.handle("hello")
+    assert commander.handle("hello").endswith("Master. What do you need?")
+    assert "I can give you the market briefing" in commander.handle("fold my laundry")
 
 
 @pytest.fixture
@@ -214,7 +215,7 @@ def test_confirm_cannot_be_spoken_guessed_or_used_late(prepared):
 
     # spoken: the transcript loses its slash and goes to the agent, never to /confirm
     code = _code(commander.handle(f"/apply {job_id}"))
-    assert "I only know commands" in commander.handle(f"/confirm {code}", spoken=True)
+    assert "I can give you the market briefing" in commander.handle(f"/confirm {code}", spoken=True)
 
     # guessed: three wrong tries void the code, including the right one
     wrong = "000000" if code != "000000" else "111111"
@@ -458,3 +459,45 @@ def test_with_a_brain_the_control_phrases_and_guards_still_hold(prepared):
     commander.handle(f"confirm {code}", spoken=True)
     assert True not in calls and heard == [f"confirm {code}"]  # it reached the brain, which has no way to apply
     assert commander.handle("go to sleep").startswith("Going to sleep") and commander.asleep
+
+
+# ---- sounding less like a machine without a language model
+
+
+def test_a_miss_is_short_varied_and_offers_buttons_instead_of_reciting_the_command_list():
+    commander = Commander()
+    replies = [commander.handle(text, spoken=True) for text in ("fold my laundry", "book a flight", "paint the wall")]
+    assert len(set(replies)) == 3 and all(len(r) < 260 and "/confirm" not in r for r in replies)
+    assert commander.choices == ["Market briefing", "Where to invest", "News PDF"]
+    assert len(commander.say) < 260  # and the spoken version is as short
+
+
+def test_small_talk_gets_a_short_human_reply():
+    from datetime import datetime
+
+    commander = Commander()
+    commander.now = lambda: datetime(2026, 11, 19, 15, 5)
+    assert commander.handle("Hello Jarvis", spoken=True) == "Good afternoon, Master. What do you need?"
+    assert commander.handle("thank you") == "Always, Master."
+    assert commander.handle("What time is it?", spoken=True) == "It is 15:05, Master."
+    assert commander.handle("what's the date") == "It is Thursday, 19 November 2026."
+    assert commander.handle("what can you do").startswith("I can give you the market briefing")
+    assert commander.handle("never mind") == "Very well, Master."
+
+
+@pytest.mark.parametrize("said, command", [
+    ("how is the market today", "/brief"), ("what is nifty doing", "/brief"),
+    ("which stocks should I buy", "/invest which stocks should I buy"),
+    ("recommend something for 30 thousand", "/invest recommend something for 30 thousand"),
+    ("show my applications", "/status"), ("how many views on youtube", "/channel"),
+    ("any jobs for me", "/jobs"), ("find engineering manager jobs", "/jobs engineering manager"),
+    ("send me the news", "/paper"),
+])
+def test_everyday_phrasings_reach_the_right_command(said, command):
+    assert botmod._spoken_to_command(said) == command
+
+
+def test_jobs_without_a_role_asks_for_one_with_buttons():
+    commander = Commander()
+    assert commander.handle("any jobs for me", spoken=True).startswith("Which role, Master?")
+    assert commander.choices == ["Find engineering manager jobs", "Find director of engineering jobs"]

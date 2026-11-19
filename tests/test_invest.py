@@ -125,9 +125,9 @@ def test_an_unrelated_message_ends_an_unfinished_invest_conversation(market):
     commander = Commander()
     commander.handle("/invest 25000")
     assert "Rs 3,500" in commander.handle("/plan 10000 10")  # a command still works mid-question
-    assert commander.handle("Moderate").startswith("I only know commands")  # no longer an answer to anything
+    assert "I can give you the market briefing" in commander.handle("Moderate")  # no longer an answer to anything
     typed = Commander()
-    assert typed.handle("shut down the server").startswith("I only know commands")  # power-off needs /shutdown
+    assert "I can give you the market briefing" in typed.handle("shut down the server")  # power-off needs /shutdown
 
 
 @respx.mock
