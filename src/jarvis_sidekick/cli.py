@@ -115,6 +115,22 @@ def say(text: str, output: str) -> None:
     click.echo(output)
 
 
+@main.command("doctor")
+@click.option("--offline", is_flag=True, help="Only checks that need no network.")
+def doctor_cmd(offline: bool) -> None:
+    """Try every integration once and report what works. Exit 1 if anything fails."""
+    from jarvis_sidekick import doctor
+
+    checks = doctor.run(offline=offline)
+    for check in checks:
+        click.echo(f"{check.status:<5} {check.name:<26} {check.detail}")
+    failed = sum(1 for c in checks if c.status == doctor.FAIL)
+    skipped = sum(1 for c in checks if c.status == doctor.SKIP)
+    click.echo(f"\n{len(checks) - failed - skipped} ok, {failed} failed, {skipped} skipped")
+    if failed:
+        sys.exit(1)
+
+
 @main.command("bot")
 @click.option("--speak", is_flag=True, help="Answer voice notes with a spoken reply as well as text.")
 def bot_cmd(speak: bool) -> None:

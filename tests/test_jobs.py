@@ -61,6 +61,15 @@ def test_resume_parsing_finds_contact_details_and_skills(resume_file):
     assert "text" not in profile.to_dict()
 
 
+def test_resume_quirks_from_real_pdfs():
+    # a profile address broken across two lines by the PDF, and skills written the way people write them
+    text = "Asha Rao\nBengaluru · asha@example.com · linkedin.com/in/asha-\nrao-12ab34\nEngineering Manager. GenAI, tech lead."
+    profile = resume.parse(text)
+    assert profile.linkedin == "https://linkedin.com/in/asha-rao-12ab34"
+    assert profile.skills == ["Generative AI", "Engineering Management", "Technical Leadership"]
+    assert resume.find_skills("LLM and LLMs and large language models") == ["LLM"]  # no duplicates
+
+
 def test_skill_matching_uses_whole_words():
     assert resume.find_skills("We use Go and C++, not Golang or Javascripting") == ["Go", "C++"]
     assert resume.find_skills("Django is good") == ["Django"]  # no 'Go' inside Django
