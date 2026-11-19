@@ -33,7 +33,7 @@ echo "== Program"
 mkdir -p "$APP"
 [ -x "$APP/venv/bin/python" ] || python3 -m venv "$APP/venv"
 "$APP/venv/bin/pip" install --quiet --upgrade pip
-"$APP/venv/bin/pip" install --quiet --upgrade "$REPO[resume,apply,youtube]"
+"$APP/venv/bin/pip" install --quiet --upgrade "$REPO[resume,apply,youtube,brain]"
 # Same version number, new code: make sure an update really replaces the installed copy.
 "$APP/venv/bin/pip" install --quiet --force-reinstall --no-deps "$REPO"
 
@@ -66,6 +66,8 @@ SETTINGS
 fi
 # Settings added in later versions: append them to an existing file without touching what is there.
 grep -q '^SIDEKICK_TIMEZONE=' "$ENV_FILE" || printf '\n# Your time zone, for the greeting\nSIDEKICK_TIMEZONE=Asia/Kolkata\n' >> "$ENV_FILE"
+grep -q '^ANTHROPIC_API_KEY=' "$ENV_FILE" || printf '\n# Claude API key: turns commands into conversation (console.anthropic.com)\nANTHROPIC_API_KEY=\n' >> "$ENV_FILE"
+grep -q '^SIDEKICK_MORNING=' "$ENV_FILE" || printf '\n# Daily message at this time (HH:MM, your time zone). Empty = none\nSIDEKICK_MORNING=\n' >> "$ENV_FILE"
 grep -q '^SIDEKICK_TITLE=' "$ENV_FILE" || printf '\n# How the bot addresses you\nSIDEKICK_TITLE=Master\n' >> "$ENV_FILE"
 chown root:root "$ENV_FILE"
 chmod 600 "$ENV_FILE"

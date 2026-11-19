@@ -27,6 +27,7 @@ def _message(text=None, *, chat_id=OWNER, sender=OWNER, chat_type="private", voi
 def telegram():
     with respx.mock(assert_all_called=False) as router:
         router.sent = router.post(f"{BASE}/sendMessage").mock(return_value=httpx.Response(200, json={"ok": True}))
+        router.typing = router.post(f"{BASE}/sendChatAction").mock(return_value=httpx.Response(200, json={"ok": True}))
         yield router
 
 
@@ -168,7 +169,7 @@ def test_plan_and_unknown_commands():
     assert "Rs 3,500" in commander.handle("/plan 10000 10")
     assert commander.handle("/plan abc 10").startswith("/plan failed")
     assert commander.handle("/rm -rf").startswith("Unknown command")
-    assert "need OpenJarvis" in commander.handle("hello")
+    assert "I only know commands" in commander.handle("hello")
 
 
 @pytest.fixture
@@ -213,7 +214,7 @@ def test_confirm_cannot_be_spoken_guessed_or_used_late(prepared):
 
     # spoken: the transcript loses its slash and goes to the agent, never to /confirm
     code = _code(commander.handle(f"/apply {job_id}"))
-    assert "need OpenJarvis" in commander.handle(f"/confirm {code}", spoken=True)
+    assert "I only know commands" in commander.handle(f"/confirm {code}", spoken=True)
 
     # guessed: three wrong tries void the code, including the right one
     wrong = "000000" if code != "000000" else "111111"
@@ -435,3 +436,25 @@ def test_long_replies_are_cut_for_speech_and_links_are_dropped():
     spoken = botmod._speakable("See https://example.com/x | **bold** " + "word " * 400)
     assert "http" not in spoken and "|" not in spoken and "*" not in spoken
     assert len(spoken) < botmod.MAX_SPOKEN_CHARS + 40 and spoken.endswith("The rest is in the message.")
+
+
+def test_it_shows_typing_and_offers_buttons_on_help(telegram):
+    import json
+
+    bot = _bot(Commander(agent=lambda text: "answer"))
+    bot.process(_message("hello"))
+    assert telegram.typing.called and "reply_markup" not in json.loads(telegram.sent.calls.last.request.content)
+    bot.process(_message("/help", update_id=2))
+    keyboard = json.loads(telegram.sent.calls.last.request.content)["reply_markup"]["keyboard"]
+    assert [button["text"] for row in keyboard for button in row] == list(botmod.BUTTONS)
+
+
+def test_with_a_brain_the_control_phrases_and_guards_still_hold(prepared):
+    commander, job_id, calls, _ = prepared
+    heard = []
+    commander.agent = lambda text: heard.append(text) or "ok"
+    assert "type /shutdown" in commander.handle("Jarvis, shut down the server", spoken=True)
+    code = _code(commander.handle(f"/apply {job_id}"))
+    commander.handle(f"confirm {code}", spoken=True)
+    assert True not in calls and heard == [f"confirm {code}"]  # it reached the brain, which has no way to apply
+    assert commander.handle("go to sleep").startswith("Going to sleep") and commander.asleep

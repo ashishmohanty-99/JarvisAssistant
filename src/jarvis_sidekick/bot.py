@@ -29,6 +29,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -63,6 +64,7 @@ HELP = """Commands (type them, or say them in a voice note):
 /doctor - check every connection (prices, news, jobs, voice, browser)
 Send a PDF or .docx to set the resume you apply with.
 /plan <monthly> <years> [conservative|moderate|aggressive]
+/memory - what I remember about you; /forget - wipe it and our conversation
 /sleep - stop answering until you say "Jarvis" (or /wake)
 /shutdown - power the server off (typed only; start it again from your provider's panel)
 Start with "Jarvis" and it greets you: "Jarvis", or "Jarvis, give me the market briefing".
@@ -91,6 +93,8 @@ class Commander:
     title: str = "Master"  # how the bot addresses you when you call it by name
     timezone: str = ""  # IANA name such as Asia/Kolkata; empty means the machine's own zone
     allow_poweroff: bool = False
+    morning: str = ""  # HH:MM for a daily message, empty for none
+    brain: Any = None  # the conversational brain, when one is configured
     say: str = field(default="", init=False)
     _after_reply: Callable[[], None] | None = field(default=None, init=False)
     agent: Callable[[str], str] | None = None
@@ -161,10 +165,14 @@ class Commander:
                 "provider's control panel and I will message you when I am back.")
 
     def _dispatch(self, text: str, spoken: bool) -> str:
-        if spoken:
-            text = _spoken_to_command(text)
+        if text in BUTTONS and (not self.conversational or BUTTONS[text] in _CONTROL):
+            text = BUTTONS[text]  # a tapped button; with a brain the label itself is the request
+        elif spoken:
+            text = _spoken_to_command(text, control_only=self.conversational)
             if text == "/shutdown":
                 return "To power off the server, type /shutdown. To pause me, say: go to sleep."
+        elif self.conversational and _spoken_to_command(text, control_only=True) == "/sleep":
+            text = "/sleep"  # "go to sleep" typed as a sentence
         if not text.startswith("/"):
             return self._ask(text)
         name, _, rest = text.partition(" ")
@@ -178,6 +186,7 @@ class Commander:
             "/jobs": self._jobs, "/apply": self._apply, "/status": self._status, "/plan": self._plan,
             "/channel": self._channel, "/doctor": self._doctor, "/sleep": self._sleep,
             "/wake": lambda _: f"I am awake, {self.title}.", "/shutdown": self._shutdown,
+            "/forget": self._forget, "/memory": self._memory,
         }.get(name)
         if handler is None:
             return "Unknown command.\n" + HELP
@@ -188,12 +197,40 @@ class Commander:
 
     # ---- commands
 
+    @property
+    def conversational(self) -> bool:
+        return self.agent is not None
+
     def _ask(self, text: str) -> str:
         if not text:
             return HELP
         if self.agent is None:
-            return "Free-form questions need OpenJarvis with a model configured.\n" + HELP
+            return "I only know commands until a language model is configured (ANTHROPIC_API_KEY).\n" + HELP
         return self.agent(text)
+
+    def _forget(self, _: str) -> str:
+        return self.brain.forget() if self.brain else "There is nothing to forget: no language model is configured."
+
+    def _memory(self, _: str) -> str:
+        notes = self.brain.notes() if self.brain else []
+        return "\n".join(["What I remember about you:", *(f"- {n}" for n in notes)]) if notes else "I have no notes yet."
+
+    def morning_due(self) -> bool:
+        """True once a day, at or after the configured HH:MM in your time zone, when awake."""
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", self.morning) or self.asleep:
+            return False
+        now, marker = self.now(), paths.home() / "morning.sent"
+        today = now.date().isoformat()
+        if f"{now:%H:%M}" < self.morning or (marker.exists() and marker.read_text().strip() == today):
+            return False
+        marker.write_text(today)
+        return True
+
+    def morning_message(self) -> str:
+        if self.agent is not None:
+            return self.agent("It is morning. Greet me and give me today's briefing: the market, anything notable "
+                              "in the news, and one thing worth my attention today.")
+        return f"{self.greeting()}, {self.title}.\n" + self._brief("")
 
     def _brief(self, _: str) -> str:
         collected = brief.collect()
@@ -324,6 +361,12 @@ def _speakable(reply: str) -> str:
     return text[:MAX_SPOKEN_CHARS].rsplit(" ", 1)[0] + ". The rest is in the message."
 
 
+# Buttons shown under the message box. Without a brain each is a command; with one, the label is the request.
+BUTTONS = {"Market briefing": "/brief", "Stocks to watch": "/screen india", "My applications": "/status",
+           "Go to sleep": "/sleep"}
+_KEYBOARD = {"keyboard": [[{"text": "Market briefing"}, {"text": "Stocks to watch"}],
+                          [{"text": "My applications"}, {"text": "Go to sleep"}]],
+             "resize_keyboard": True, "is_persistent": True}
 POWEROFF_REQUEST = "poweroff.request"  # watched by a root-owned systemd unit on the server install
 
 
@@ -345,10 +388,19 @@ _SPOKEN = (
 )
 
 
-def _spoken_to_command(text: str) -> str:
-    """Map a transcribed sentence onto a command. /apply and /confirm are never reachable by voice."""
+_CONTROL = ("/sleep", "/wake", "/shutdown")
+
+
+def _spoken_to_command(text: str, *, control_only: bool = False) -> str:
+    """Map a transcribed sentence onto a command. /apply and /confirm are never reachable by voice.
+
+    With a conversational brain only the control phrases (sleep, wake, power off) are mapped;
+    everything else is left as a sentence for the brain, which is what makes it a conversation.
+    """
     cleaned = text.strip().rstrip(".!?").lstrip("/")
     for pattern, command in _SPOKEN:
+        if control_only and command not in _CONTROL:
+            continue
         found = pattern.match(cleaned)
         if found:
             return command.format(*(g.strip() for g in found.groups()))
@@ -403,10 +455,20 @@ class Bot:
             raise TelegramError(f"Telegram {method} was rejected (HTTP {response.status_code})")
         return payload
 
-    def send(self, text: str) -> None:
+    def send(self, text: str, *, buttons: bool = False) -> None:
         for start in range(0, len(text) or 1, 4000):
-            self._call("sendMessage", json={"chat_id": self._owner, "text": text[start:start + 4000] or "(empty)",
-                                            "disable_web_page_preview": True})
+            payload = {"chat_id": self._owner, "text": text[start:start + 4000] or "(empty)",
+                       "disable_web_page_preview": True}
+            if buttons:
+                payload["reply_markup"] = _KEYBOARD
+            self._call("sendMessage", json=payload)
+
+    def _typing(self) -> None:
+        """Show "typing..." while the answer is prepared. Cosmetic: a failure here must not stop the reply."""
+        try:
+            self._call("sendChatAction", json={"chat_id": self._owner, "action": "typing"})
+        except TelegramError:
+            pass
 
     def skip_backlog(self) -> None:
         """Drop everything sent while the bot was not running: stale commands must not fire on start."""
@@ -505,8 +567,9 @@ class Bot:
             return
         if spoken:
             self.send(f"Heard: {text}")
+        self._typing()
         reply = self._commander.handle(text, spoken=spoken)
-        self.send(reply)
+        self.send(reply, buttons=text.strip().lower().split("@")[0] in ("/start", "/help"))
         action = self._commander.take_action()
         if action:
             action()
@@ -543,10 +606,14 @@ class Bot:
         self.skip_backlog()
         (paths.home() / POWEROFF_REQUEST).unlink(missing_ok=True)
         state = " I am asleep; say Jarvis to wake me." if self._commander.asleep else ""
-        self.send(f"{self._commander.greeting()}, {self._commander.title}. Jarvis is online.{state} /help lists commands.")
+        self.send(f"{self._commander.greeting()}, {self._commander.title}. Jarvis is online.{state} /help lists commands.",
+                  buttons=True)
         while True:
             try:
                 self.poll_once()
+                if self._commander.morning_due():
+                    self._typing()
+                    self.send(self._commander.morning_message())
             except TelegramError as exc:
                 logger.warning("%s; retrying in 10s", exc)
                 time.sleep(10)
@@ -560,6 +627,13 @@ def from_env(*, speak: bool = False) -> Bot:
         title=os.environ.get("SIDEKICK_TITLE", "").strip()[:30] or "Master",
         timezone=os.environ.get("SIDEKICK_TIMEZONE", "").strip(),
         allow_poweroff=os.environ.get("SIDEKICK_ALLOW_POWEROFF") == "1",
-        agent=jarvis_agent(),
+        morning=os.environ.get("SIDEKICK_MORNING", "").strip(),
     )
+    from jarvis_sidekick import brain as brain_module
+
+    commander.brain = brain_module.from_env(
+        title=commander.title, now=commander.now, resume_path=commander.resume_path,
+        channel_id=commander.channel_id, locations=commander.locations,
+    )
+    commander.agent = commander.brain.ask if commander.brain else jarvis_agent()
     return Bot(os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", ""), commander, speak=speak)

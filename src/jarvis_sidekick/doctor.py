@@ -127,6 +127,31 @@ def _elevenlabs() -> str:
     return f"spoke {len(audio):,} bytes and heard it back: {heard!r}"
 
 
+def _brain() -> str:
+    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
+        raise _Skip("set ANTHROPIC_API_KEY for conversation; without it the bot only knows commands")
+    try:
+        import anthropic
+    except ImportError:
+        raise _Skip("pip install 'jarvis-sidekick[brain]'") from None
+    from jarvis_sidekick.brain import DEFAULT_MODEL
+
+    model = os.environ.get("SIDEKICK_MODEL", "").strip() or DEFAULT_MODEL
+    try:
+        response = anthropic.Anthropic(timeout=60.0).messages.create(
+            model=model, max_tokens=2000, output_config={"effort": "low"},
+            messages=[{"role": "user", "content": "Reply with the single word: ready"}],
+        )
+    except anthropic.AuthenticationError:
+        raise RuntimeError("the key was rejected") from None
+    except anthropic.APIStatusError as exc:
+        raise RuntimeError(f"{model} answered HTTP {exc.status_code}") from None
+    except anthropic.APIConnectionError:
+        raise RuntimeError("could not reach the Claude API") from None
+    said = " ".join(b.text for b in response.content if b.type == "text").strip()
+    return f"{response.model} answered {said!r}"
+
+
 def _telegram() -> str:
     _need("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
     from jarvis_sidekick.bot import Bot, Commander
@@ -183,6 +208,7 @@ def run(offline: bool = False) -> list[Check]:
     live: list[tuple[str, Callable[[], str]]] = [
         ("prices (Yahoo)", _prices), ("news feeds", _news),
         *[(f"jobs: {name}", _job_source(name)) for name in ("remotive", "arbeitnow", "remoteok", "adzuna")],
-        ("YouTube channel", _channel), ("ElevenLabs voice", _elevenlabs), ("Telegram bot", _telegram),
+        ("YouTube channel", _channel), ("ElevenLabs voice", _elevenlabs), ("Claude (conversation)", _brain),
+        ("Telegram bot", _telegram),
     ]
     return [_run(name, function) for name, function in (local if offline else local + live)]

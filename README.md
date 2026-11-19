@@ -37,6 +37,18 @@ sidekick voice-setup               # points OpenJarvis speech at ElevenLabs, bot
 
 Most commands also work without OpenJarvis (`pip install -e ".[resume,apply]"`): jobs, brief, screen, plan, hustle, scrape, transcribe. Voice chat and `sidekick jarvis ...` need it.
 
+## Conversation
+
+With a Claude API key (`ANTHROPIC_API_KEY`) the bot stops being a list of commands. Say "Jarvis, how did the market do and what looks worth researching?" and it fetches the data it needs, answers in a few spoken-length sentences, asks a follow-up when the next step depends on you, and remembers the thread. It also keeps short notes on what you tell it about yourself (horizon, monthly amount, risk comfort); `/memory` shows them and `/forget` wipes them along with the conversation.
+
+- Model: `claude-opus-5-5` by default; set `SIDEKICK_MODEL` to change it. Each message is a paid API call; a limit of 150 conversations a day is built in.
+- Every tool the model has reads: market data, quotes, the screen, the plan calculator, job search, your application list, your channel, a web page, web search. It cannot apply for a job, power anything off or run a command; those stay typed slash commands.
+- If a safety classifier declines a request, the API's server-side fallback lets another Claude model answer in the same call.
+- Your messages, your notes and the tool results go to Anthropic's API to produce the answer. The conversation and notes are also stored on your machine in `~/.jarvis-sidekick/`, readable only by the bot's account.
+- `SIDEKICK_MORNING=07:30` sends a morning greeting and briefing every day at that time.
+
+Without a key everything else still works, as commands.
+
 ## Check your setup
 
 ```bash
@@ -135,7 +147,7 @@ Nobody can. The working pattern is: search for what you need (OpenJarvis `web_se
 
 ## Verified, and not yet
 
-Verified by the test suite (`pytest`, 118 tests): the ElevenLabs request format and response parsing against the documented API shape; registration into a real OpenJarvis install and resolution through its speech discovery and tool executor; the form filler against a real Chromium and a local stand-in form (dry run sends nothing, confirm sends, unanswered questions and CAPTCHAs block); scoring, tracker, indicators, plan arithmetic, feed parsing, error paths that must not leak keys; the bot's owner check, backlog skip, rate limit, voice-note limits and one-time confirmation codes.
+Verified by the test suite (`pytest`, 132 tests): the ElevenLabs request format and response parsing against the documented API shape; registration into a real OpenJarvis install and resolution through its speech discovery and tool executor; the form filler against a real Chromium and a local stand-in form (dry run sends nothing, confirm sends, unanswered questions and CAPTCHAs block); scoring, tracker, indicators, plan arithmetic, feed parsing, error paths that must not leak keys; the bot's owner check, backlog skip, rate limit, voice-note limits and one-time confirmation codes.
 
 Run live on an Ubuntu 24.04 cloud server through `/doctor` (19 November 2026): the Telegram bot under its restricted system service, resume upload through the bot, ElevenLabs speech out and back in, Yahoo prices, the news feeds, the Remotive, Arbeitnow and RemoteOK job sources, the YouTube channel feed, and Chromium start-up.
 
