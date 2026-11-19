@@ -28,7 +28,7 @@ Goal: one assistant you talk to that reads the web, hunts jobs against your resu
 - [x] Content rule checker for drafts; YouTube channel report (`sidekick channel`, `/channel`)
 - [x] Deployment: macOS login service; one-command Ubuntu server install with a restricted system service; Docker files
 - [x] Resume by sending the file to the bot; `/doctor` from the phone
-- [x] Nine OpenJarvis tools; 109 tests; lint clean; `SECURITY.md` threat table
+- [x] Nine OpenJarvis tools; 114 tests; lint clean; `SECURITY.md` threat table
 
 ### Phase 2: first live run (needs your keys and machine)
 - [ ] Run each command against the live services and fix any parser drift (ElevenLabs, job APIs, Yahoo, feeds, YouTube)

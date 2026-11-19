@@ -328,3 +328,48 @@ def test_doctor_command_reports_without_touching_telegram_itself(monkeypatch):
         doctor.Check("jobs: remoteok", doctor.FAIL, "HTTP 503")])
     reply = Commander().handle("/doctor")
     assert reply == "ok  news feeds: 12 headlines\nFAIL  jobs: remoteok: HTTP 503\n\n1 failed"
+
+
+# ---- called by name
+
+
+def test_calling_it_by_name_alone_gets_the_greeting():
+    commander = Commander()
+    for said in ("Jarvis", "jarvis.", "Hey Jarvis!", "Javis?", "OK, Jarvis"):
+        assert commander.handle(said, spoken=True) == "Yes, Master. What do you need?"
+        assert commander.say == "Yes, Master. What do you need?"
+    assert Commander(title="sir").handle("Jarvis") == "Yes, sir. What do you need?"
+
+
+def test_name_then_command_runs_the_command_and_answers_by_title(monkeypatch):
+    collected = {"generated_at": "now", "indices": [{"name": "NIFTY 50", "price": 25227.95, "day_pct": -0.63,
+                 "month_pct": 1.0, "half_year_pct": 2.0}], "movers": {}, "screens": {}, "news": {}, "unavailable": [],
+                 "disclaimer": "Research aid."}
+    monkeypatch.setattr(botmod.brief, "collect", lambda: collected)
+    commander = Commander()
+    reply = commander.handle("Jarvis, give me the market briefing.", spoken=True)
+    assert reply.startswith("Yes, Master.\n# Market briefing") and "| NIFTY 50 | 25,227.95 | -0.63% |" in reply
+    assert commander.say == "Yes, Master. NIFTY 50 is down 0.6 percent at 25,228."  # spoken: numbers, not the table
+
+    plain = commander.handle("/brief")
+    assert plain.startswith("# Market briefing") and not commander.say.startswith("Yes")
+
+
+def test_words_that_merely_start_like_the_name_are_left_alone():
+    commander = Commander(agent=lambda text: f"asked: {text}")
+    assert commander.handle("Jarvisville is a town") == "asked: Jarvisville is a town"
+    assert commander.handle("jarvis what is the repo rate") == "Yes, Master.\nasked: what is the repo rate"
+
+
+def test_the_name_does_not_open_a_way_around_typed_confirmation(prepared):
+    commander, job_id, calls, _ = prepared
+    code = _code(commander.handle(f"/apply {job_id}"))
+    commander.handle(f"Jarvis, /confirm {code}", spoken=True)
+    commander.handle(f"Jarvis confirm {code}", spoken=True)
+    assert True not in calls
+
+
+def test_long_replies_are_cut_for_speech_and_links_are_dropped():
+    spoken = botmod._speakable("See https://example.com/x | **bold** " + "word " * 400)
+    assert "http" not in spoken and "|" not in spoken and "*" not in spoken
+    assert len(spoken) < botmod.MAX_SPOKEN_CHARS + 40 and spoken.endswith("The rest is in the message.")

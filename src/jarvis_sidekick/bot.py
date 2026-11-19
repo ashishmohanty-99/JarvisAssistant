@@ -61,6 +61,7 @@ HELP = """Commands (type them, or say them in a voice note):
 /doctor - check every connection (prices, news, jobs, voice, browser)
 Send a PDF or .docx to set the resume you apply with.
 /plan <monthly> <years> [conservative|moderate|aggressive]
+Start with "Jarvis" and it answers you by title: "Jarvis, give me the market briefing".
 Anything else is answered by Jarvis."""
 
 
@@ -83,12 +84,30 @@ class Commander:
     resume_path: str = ""
     locations: str = ""
     channel_id: str = ""
+    title: str = "Master"  # how the bot addresses you when you call it by name
+    say: str = field(default="", init=False)
     agent: Callable[[str], str] | None = None
     clock: Callable[[], float] = time.monotonic
     pending: Pending | None = field(default=None, init=False)
 
     def handle(self, text: str, *, spoken: bool = False) -> str:
+        """Answer one message. Afterwards ``self.say`` holds a short version fit for speaking aloud."""
         text = text.strip()[:MAX_TEXT_CHARS]
+        called = _WAKE.match(text)
+        if called:
+            text = text[called.end():].strip()
+            if not text:
+                self.say = f"Yes, {self.title}. What do you need?"
+                return self.say
+        self.say = ""
+        reply = self._dispatch(text, spoken)
+        if called:
+            reply = f"Yes, {self.title}.\n{reply}"
+        spoken_text = self.say or _speakable(reply)
+        self.say = f"Yes, {self.title}. {spoken_text}" if called and self.say else spoken_text
+        return reply
+
+    def _dispatch(self, text: str, spoken: bool) -> str:
         if spoken:
             text = _spoken_to_command(text)
         if not text.startswith("/"):
@@ -124,6 +143,7 @@ class Commander:
         collected = brief.collect()
         if not collected["indices"] and not any(collected["news"].values()):
             return "No market data or news could be fetched right now."
+        self.say = brief.to_speech(collected)  # the headline numbers, not the whole table read aloud
         return brief.to_markdown(collected)
 
     def _screen(self, rest: str) -> str:
@@ -233,6 +253,19 @@ class Commander:
         lines += [f"{label}: Rs {value:,.0f} ({built.blended_return_pct[label]}%/yr assumed)"
                   for label, value in built.projected.items()]
         return "\n".join([*lines, "", *built.caveats])
+
+
+# "Jarvis", "Hey Jarvis," ... at the start of a message. Speech-to-text also writes "Javis" and "Jarvis's".
+_WAKE = re.compile(r"^\s*(?:hey|hi|ok|okay|hello)?[\s,]*j[ae]r?vis(?:'s)?\b[\s,.!?:;-]*", re.IGNORECASE)
+MAX_SPOKEN_CHARS = 600
+
+
+def _speakable(reply: str) -> str:
+    """A reply trimmed for the ear: no links or table marks, and short."""
+    text = " ".join(re.sub(r"https?://\S+|[|#*_`]", " ", reply).split())
+    if len(text) <= MAX_SPOKEN_CHARS:
+        return text
+    return text[:MAX_SPOKEN_CHARS].rsplit(" ", 1)[0] + ". The rest is in the message."
 
 
 _SPOKEN = (
@@ -408,13 +441,13 @@ class Bot:
         reply = self._commander.handle(text, spoken=spoken)
         self.send(reply)
         if spoken and self._speak:
-            self._say(reply)
+            self._say(self._commander.say or reply)
 
     def _say(self, reply: str) -> None:
         from jarvis_sidekick.speech.elevenlabs_say import synthesize
 
         try:
-            audio = synthesize(re.sub(r"https?://\S+|[|#*_`]", " ", reply))
+            audio = synthesize(_speakable(reply))
             self._call("sendAudio", data={"chat_id": str(self._owner), "title": "Jarvis"},
                        files={"audio": ("reply.mp3", audio, "audio/mpeg")})
         except (RuntimeError, ValueError) as exc:
@@ -451,6 +484,7 @@ def from_env(*, speak: bool = False) -> Bot:
         resume_path=os.environ.get("SIDEKICK_RESUME", ""),
         locations=os.environ.get("SIDEKICK_LOCATIONS", ""),
         channel_id=os.environ.get("SIDEKICK_YOUTUBE_CHANNEL", ""),
+        title=os.environ.get("SIDEKICK_TITLE", "").strip()[:30] or "Master",
         agent=jarvis_agent(),
     )
     return Bot(os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", ""), commander, speak=speak)
