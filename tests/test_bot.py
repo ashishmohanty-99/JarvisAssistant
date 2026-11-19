@@ -333,12 +333,74 @@ def test_doctor_command_reports_without_touching_telegram_itself(monkeypatch):
 # ---- called by name
 
 
-def test_calling_it_by_name_alone_gets_the_greeting():
-    commander = Commander()
+def _at(hour, **kwargs):
+    from datetime import datetime
+
+    commander = Commander(**kwargs)
+    commander.now = lambda: datetime(2026, 11, 19, hour, 30)
+    return commander
+
+
+def test_calling_it_by_name_alone_gets_a_greeting_for_the_time_of_day():
+    commander = _at(9)
     for said in ("Jarvis", "jarvis.", "Hey Jarvis!", "Javis?", "OK, Jarvis"):
-        assert commander.handle(said, spoken=True) == "Yes, Master. What do you need?"
-        assert commander.say == "Yes, Master. What do you need?"
-    assert Commander(title="sir").handle("Jarvis") == "Yes, sir. What do you need?"
+        assert commander.handle(said, spoken=True) == "Good morning, Master. What do you need?"
+        assert commander.say == "Good morning, Master. What do you need?"
+    assert _at(14, title="sir").handle("Jarvis") == "Good afternoon, sir. What do you need?"
+    assert _at(19).greeting() == "Good evening" and _at(23).greeting() == _at(3).greeting() == "You are up late"
+
+
+def test_greeting_uses_the_configured_time_zone_and_survives_a_bad_one():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    india, japan = Commander(timezone="Asia/Kolkata").now(), Commander(timezone="Asia/Tokyo").now()
+    assert india.utcoffset().total_seconds() == 5.5 * 3600 and japan.utcoffset().total_seconds() == 9 * 3600
+    assert abs((datetime.now(ZoneInfo("UTC")) - india).total_seconds()) < 5
+    assert Commander(timezone="Mars/Olympus").now().tzinfo is not None
+
+
+def test_asleep_it_answers_only_to_its_name():
+    asked = []
+    commander = _at(7, agent=lambda text: asked.append(text) or "answer")
+    assert commander.handle("Jarvis, go to sleep", spoken=True) == "Yes, Master.\nGoing to sleep, Master. Say Jarvis to wake me."
+    assert commander.asleep
+    assert commander.handle("/brief") == "I am asleep, Master. Say Jarvis to wake me."
+    assert commander.handle("what is the repo rate", spoken=True).startswith("I am asleep") and asked == []
+    assert Commander().asleep  # it stays asleep across a restart
+
+    assert commander.handle("Jarvis", spoken=True) == "Good morning, Master. I am awake. What do you need?"
+    assert not commander.asleep
+    commander.handle("/sleep")
+    assert commander.handle("Jarvis, what is the repo rate") == "Yes, Master.\nanswer" and not commander.asleep
+    commander.handle("/sleep")
+    assert commander.handle("/wake") == "Good morning, Master. I am awake. What do you need?"
+
+
+def test_shutdown_must_be_typed_and_happens_only_after_the_reply(telegram):
+    from jarvis_sidekick import paths
+
+    request = paths.home() / botmod.POWEROFF_REQUEST
+    assert Commander().handle("/shutdown") == "Powering off is only available on the server install."
+
+    commander = Commander(allow_poweroff=True)
+    assert commander.handle("Jarvis, shut down the server", spoken=True).endswith("To pause me, say: go to sleep.")
+    assert commander.take_action() is None and not request.exists()
+
+    bot = _bot(commander)
+    order = []
+    telegram.sent.mock(side_effect=lambda r: order.append(request.exists()) or httpx.Response(200, json={"ok": True}))
+    bot.process(_message("/shutdown"))
+    assert order == [False] and request.exists()  # the reply went out first, then the request was written
+    assert "Powering off the server, Master" in _texts(telegram)[-1]
+
+
+def test_a_stranger_cannot_shut_the_server_down(telegram):
+    from jarvis_sidekick import paths
+
+    bot = _bot(Commander(allow_poweroff=True))
+    bot.process(_message("/shutdown", chat_id=999, sender=999))
+    assert bot.dropped == 1 and not (paths.home() / botmod.POWEROFF_REQUEST).exists()
 
 
 def test_name_then_command_runs_the_command_and_answers_by_title(monkeypatch):

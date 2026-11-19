@@ -28,6 +28,8 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
@@ -61,7 +63,9 @@ HELP = """Commands (type them, or say them in a voice note):
 /doctor - check every connection (prices, news, jobs, voice, browser)
 Send a PDF or .docx to set the resume you apply with.
 /plan <monthly> <years> [conservative|moderate|aggressive]
-Start with "Jarvis" and it answers you by title: "Jarvis, give me the market briefing".
+/sleep - stop answering until you say "Jarvis" (or /wake)
+/shutdown - power the server off (typed only; start it again from your provider's panel)
+Start with "Jarvis" and it greets you: "Jarvis", or "Jarvis, give me the market briefing".
 Anything else is answered by Jarvis."""
 
 
@@ -85,7 +89,10 @@ class Commander:
     locations: str = ""
     channel_id: str = ""
     title: str = "Master"  # how the bot addresses you when you call it by name
+    timezone: str = ""  # IANA name such as Asia/Kolkata; empty means the machine's own zone
+    allow_poweroff: bool = False
     say: str = field(default="", init=False)
+    _after_reply: Callable[[], None] | None = field(default=None, init=False)
     agent: Callable[[str], str] | None = None
     clock: Callable[[], float] = time.monotonic
     pending: Pending | None = field(default=None, init=False)
@@ -96,9 +103,18 @@ class Commander:
         called = _WAKE.match(text)
         if called:
             text = text[called.end():].strip()
-            if not text:
-                self.say = f"Yes, {self.title}. What do you need?"
+        if self.asleep:
+            # Asleep, it answers to its name (or /wake) and nothing else.
+            if not (called or text.lower().split("@")[0] == "/wake"):
+                self.say = f"I am asleep, {self.title}. Say Jarvis to wake me."
                 return self.say
+            _asleep_flag().unlink(missing_ok=True)
+            if not text or text.lower().startswith("/wake") or _spoken_to_command(text) == "/wake":
+                self.say = f"{self.greeting()}, {self.title}. I am awake. What do you need?"
+                return self.say
+        if called and not text:
+            self.say = f"{self.greeting()}, {self.title}. What do you need?"
+            return self.say
         self.say = ""
         reply = self._dispatch(text, spoken)
         if called:
@@ -107,9 +123,48 @@ class Commander:
         self.say = f"Yes, {self.title}. {spoken_text}" if called and self.say else spoken_text
         return reply
 
+    @property
+    def asleep(self) -> bool:
+        return _asleep_flag().exists()
+
+    def greeting(self) -> str:
+        """Good morning / afternoon / evening by the clock where you are (SIDEKICK_TIMEZONE)."""
+        hour = self.now().hour
+        if 5 <= hour < 12:
+            return "Good morning"
+        if 12 <= hour < 17:
+            return "Good afternoon"
+        if 17 <= hour < 22:
+            return "Good evening"
+        return "You are up late"
+
+    def now(self) -> datetime:
+        try:
+            return datetime.now(ZoneInfo(self.timezone)) if self.timezone else datetime.now().astimezone()
+        except (ZoneInfoNotFoundError, ValueError):
+            return datetime.now().astimezone()
+
+    def take_action(self) -> Callable[[], None] | None:
+        """Something to do after the reply has been delivered (powering off must not cut the reply short)."""
+        action, self._after_reply = self._after_reply, None
+        return action
+
+    def _sleep(self, _: str) -> str:
+        _asleep_flag().touch()
+        return f"Going to sleep, {self.title}. Say Jarvis to wake me."
+
+    def _shutdown(self, _: str) -> str:
+        if not self.allow_poweroff:
+            return "Powering off is only available on the server install."
+        self._after_reply = lambda: (paths.home() / POWEROFF_REQUEST).touch()
+        return (f"Powering off the server, {self.title}. I cannot hear you while it is off: start it again from your "
+                "provider's control panel and I will message you when I am back.")
+
     def _dispatch(self, text: str, spoken: bool) -> str:
         if spoken:
             text = _spoken_to_command(text)
+            if text == "/shutdown":
+                return "To power off the server, type /shutdown. To pause me, say: go to sleep."
         if not text.startswith("/"):
             return self._ask(text)
         name, _, rest = text.partition(" ")
@@ -121,7 +176,8 @@ class Commander:
         handler = {
             "/start": lambda _: HELP, "/help": lambda _: HELP, "/brief": self._brief, "/screen": self._screen,
             "/jobs": self._jobs, "/apply": self._apply, "/status": self._status, "/plan": self._plan,
-            "/channel": self._channel, "/doctor": self._doctor,
+            "/channel": self._channel, "/doctor": self._doctor, "/sleep": self._sleep,
+            "/wake": lambda _: f"I am awake, {self.title}.", "/shutdown": self._shutdown,
         }.get(name)
         if handler is None:
             return "Unknown command.\n" + HELP
@@ -268,7 +324,18 @@ def _speakable(reply: str) -> str:
     return text[:MAX_SPOKEN_CHARS].rsplit(" ", 1)[0] + ". The rest is in the message."
 
 
+POWEROFF_REQUEST = "poweroff.request"  # watched by a root-owned systemd unit on the server install
+
+
+def _asleep_flag():
+    return paths.home() / "asleep"
+
+
 _SPOKEN = (
+    (re.compile(r"^(?:please )?(?:go (?:back )?to sleep|sleep(?: now)?|good ?night|stand by|that is all|that's all)\b.*",
+                re.IGNORECASE), "/sleep"),
+    (re.compile(r"^(?:please )?(?:wake up|wake|are you there|are you awake)\b.*", re.IGNORECASE), "/wake"),
+    (re.compile(r"^(?:please )?(?:shut ?down|power ?off|switch off|turn off)\b.*", re.IGNORECASE), "/shutdown"),
     (re.compile(r"^(?:give me |send |get )?(?:the |my |a )?(?:market |morning |daily )?brief(?:ing)?\b.*", re.IGNORECASE), "/brief"),
     (re.compile(r"^(?:show |get )?(?:my )?(?:application )?status\b.*", re.IGNORECASE), "/status"),
     (re.compile(r"^(?:find|search|look for)(?: me)?(?: some)? (?:jobs? (?:for|as) )?(.+?)(?: jobs?)?$", re.IGNORECASE), "/jobs {0}"),
@@ -440,6 +507,10 @@ class Bot:
             self.send(f"Heard: {text}")
         reply = self._commander.handle(text, spoken=spoken)
         self.send(reply)
+        action = self._commander.take_action()
+        if action:
+            action()
+            return
         if spoken and self._speak:
             self._say(self._commander.say or reply)
 
@@ -470,7 +541,9 @@ class Bot:
 
     def run(self) -> None:
         self.skip_backlog()
-        self.send("Jarvis sidekick is online. /help lists commands.")
+        (paths.home() / POWEROFF_REQUEST).unlink(missing_ok=True)
+        state = " I am asleep; say Jarvis to wake me." if self._commander.asleep else ""
+        self.send(f"{self._commander.greeting()}, {self._commander.title}. Jarvis is online.{state} /help lists commands.")
         while True:
             try:
                 self.poll_once()
@@ -485,6 +558,8 @@ def from_env(*, speak: bool = False) -> Bot:
         locations=os.environ.get("SIDEKICK_LOCATIONS", ""),
         channel_id=os.environ.get("SIDEKICK_YOUTUBE_CHANNEL", ""),
         title=os.environ.get("SIDEKICK_TITLE", "").strip()[:30] or "Master",
+        timezone=os.environ.get("SIDEKICK_TIMEZONE", "").strip(),
+        allow_poweroff=os.environ.get("SIDEKICK_ALLOW_POWEROFF") == "1",
         agent=jarvis_agent(),
     )
     return Bot(os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", ""), commander, speak=speak)

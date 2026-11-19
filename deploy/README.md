@@ -47,6 +47,15 @@ Day to day:
 | change a setting | `nano /etc/jarvis-sidekick/env`, then `systemctl restart jarvis-sidekick` |
 | stop it | `systemctl stop jarvis-sidekick` |
 
+Pausing and powering off, from Telegram:
+
+| Say or type | What happens | To bring it back |
+|---|---|---|
+| "Jarvis, go to sleep" or `/sleep` | The bot stops answering. The server keeps running. | Say "Jarvis" |
+| `/shutdown` (typed only) | The server powers off. | Power it on in your provider's control panel; the bot starts by itself and messages you |
+
+A powered-off server cannot hear a message, so starting it always happens at the provider. Most providers, DigitalOcean included, keep charging for a server that is powered off, because its disk and address stay reserved; billing stops only when the server is destroyed.
+
 What a server cannot do:
 - No microphone, so no `sidekick voice`. Voice notes through Telegram work the same.
 - Free-form questions need OpenJarvis and a model, which this install leaves out. The slash commands and voice-note commands need neither.

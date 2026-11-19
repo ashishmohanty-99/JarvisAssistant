@@ -64,14 +64,21 @@ ADZUNA_APP_ID=
 ADZUNA_APP_KEY=
 SETTINGS
 fi
+# Settings added in later versions: append them to an existing file without touching what is there.
+grep -q '^SIDEKICK_TIMEZONE=' "$ENV_FILE" || printf '\n# Your time zone, for the greeting\nSIDEKICK_TIMEZONE=Asia/Kolkata\n' >> "$ENV_FILE"
+grep -q '^SIDEKICK_TITLE=' "$ENV_FILE" || printf '\n# How the bot addresses you\nSIDEKICK_TITLE=Master\n' >> "$ENV_FILE"
 chown root:root "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
 echo "== Service"
 install -m 644 "$REPO/deploy/cloud/jarvis-sidekick.service" "$UNIT"
+install -m 644 "$REPO/deploy/cloud/jarvis-sidekick-poweroff.path" /etc/systemd/system/
+install -m 644 "$REPO/deploy/cloud/jarvis-sidekick-poweroff.service" /etc/systemd/system/
+rm -f /var/lib/jarvis-sidekick/poweroff.request
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload
     systemctl enable jarvis-sidekick >/dev/null 2>&1
+    systemctl enable --now jarvis-sidekick-poweroff.path >/dev/null 2>&1
     if grep -Eq '^TELEGRAM_BOT_TOKEN=.+' "$ENV_FILE" && grep -Eq '^TELEGRAM_CHAT_ID=.+' "$ENV_FILE"; then
         systemctl restart jarvis-sidekick
         echo "Bot restarted. Watch it:  journalctl -u jarvis-sidekick -f"

@@ -16,6 +16,7 @@ No software can promise it "cannot be hacked". What this project does is keep th
 | A hostile news feed uses XML tricks to read local files | XML entities and network access are disabled in the parser. |
 | Your API key leaks through an error message or log | Provider errors report a status code or error category only. The bot silences the HTTP library's request logging, which would otherwise print the bot token. |
 | Someone floods the bot to run up your ElevenLabs bill | 20 messages a minute; voice notes capped at 2 minutes and 5 MB; spoken replies capped at 2,500 characters. |
+| Someone powers your server off | `/shutdown` is answered for the owner only and must be typed, never spoken. The bot cannot power off by itself: it leaves a request file that a separate root-owned unit acts on, and that unit can do nothing else. |
 | Runaway applications | 10 a day, never twice to the same job, never past a CAPTCHA or an unanswered required question. |
 
 ## What you must do

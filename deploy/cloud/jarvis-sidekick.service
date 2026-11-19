@@ -11,6 +11,7 @@ Environment=SIDEKICK_HOME=/var/lib/jarvis-sidekick
 Environment=HOME=/var/lib/jarvis-sidekick
 Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/jarvis-sidekick/browsers
 Environment=PYTHONUNBUFFERED=1
+Environment=SIDEKICK_ALLOW_POWEROFF=1
 StateDirectory=jarvis-sidekick
 StateDirectoryMode=0700
 WorkingDirectory=/var/lib/jarvis-sidekick
