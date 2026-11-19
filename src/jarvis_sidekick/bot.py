@@ -29,12 +29,13 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
-from jarvis_sidekick import _http, common, paths, publish
+from jarvis_sidekick import _http, common, paper, paths, publish
 from jarvis_sidekick.jobs import apply, match, sources
 from jarvis_sidekick.jobs.tracker import Tracker
 from jarvis_sidekick.markets import brief, data, indicators, invest, plan
@@ -54,7 +55,8 @@ CODE_ATTEMPTS = 3
 AGENT_TOOLS = ("web_search", "web_scrape", "job_search", "market_brief", "stock_screen", "investment_plan",
                "github_profile", "youtube_channel", "side_hustle_ideas", "calculator", "think")
 HELP = """Commands (type them, or say them in a voice note):
-/brief - market briefing
+/paper - today's news and markets as a designed PDF
+/brief - market briefing as text
 /screen india|us|etf - momentum screen
 /jobs <role> [in <place, place>] - search and rank against your resume
 /apply <id> - fill the form (sends nothing), then gives you a code
@@ -105,6 +107,7 @@ class Commander:
     choices: list[str] = field(default_factory=list, init=False)  # answer buttons for the reply just given
     _invest: dict | None = field(default=None, init=False)
     _awaiting_video_text: bool = field(default=False, init=False)
+    _attachment: Path | None = field(default=None, init=False)
     youtube_login: publish.DeviceLogin | None = field(default=None, init=False)
 
     def handle(self, text: str, *, spoken: bool = False) -> str:
@@ -153,6 +156,11 @@ class Commander:
             return datetime.now(ZoneInfo(self.timezone)) if self.timezone else datetime.now().astimezone()
         except (ZoneInfoNotFoundError, ValueError):
             return datetime.now().astimezone()
+
+    def take_attachment(self) -> Path | None:
+        """A file to send after the reply (the PDF edition)."""
+        attachment, self._attachment = self._attachment, None
+        return attachment
 
     def take_action(self) -> Callable[[], None] | None:
         """Something to do after the reply has been delivered (powering off must not cut the reply short)."""
@@ -207,7 +215,7 @@ class Commander:
             "/channel": self._channel, "/doctor": self._doctor, "/sleep": self._sleep,
             "/wake": lambda _: f"I am awake, {self.title}.", "/shutdown": self._shutdown,
             "/forget": self._forget, "/memory": self._memory, "/invest": self._invest_start,
-            "/youtube": self._youtube, "/publish": self._publish, "/skip": self._skip, "/draft": self._draft,
+            "/paper": self._paper, "/youtube": self._youtube, "/publish": self._publish, "/skip": self._skip, "/draft": self._draft,
             "/text": self._video_text,
         }.get(name)
         if handler is None:
@@ -374,10 +382,44 @@ class Commander:
         return True
 
     def morning_message(self) -> str:
+        """The morning greeting. The PDF edition is attached whenever it can be produced."""
+        try:
+            edition = self._paper("")
+        except (_http.FetchError, RuntimeError, OSError, ValueError) as exc:
+            edition = f"The PDF edition could not be produced: {exc}"
         if self.agent is not None:
             return self.agent("It is morning. Greet me and give me today's briefing: the market, anything notable "
                               "in the news, and one thing worth my attention today.")
-        return f"{self.greeting()}, {self.title}.\n" + self._brief("")
+        return f"{self.greeting()}, {self.title}. {edition}"
+
+    def _paper(self, _: str) -> str:
+        collected = brief.collect(("india",))
+        if not collected["indices"] and not any(collected["news"].values()):
+            return "No market data or news could be fetched right now, so there is no edition to print."
+        now = self.now()
+        page = paper.build_html(collected, now=now, title=self.title, extras=self._own_numbers())
+        self._attachment = paper.render_pdf(page, paths.home() / "briefings" / f"jarvis-brief-{now:%Y-%m-%d}.pdf")
+        self.say = brief.to_speech(collected)
+        return "Here is today's edition."
+
+    def _own_numbers(self) -> list[tuple[str, str]]:
+        """Small personal figures for the last strip of the page. Anything unavailable is left out."""
+        numbers: list[tuple[str, str]] = []
+        tracker = Tracker()
+        try:
+            rows = tracker.all()
+        finally:
+            tracker.close()
+        if rows:
+            numbers.append(("Applications in progress", str(sum(r["status"] != "submitted" for r in rows))))
+            numbers.append(("Applications sent", str(sum(r["status"] == "submitted" for r in rows))))
+        if self.channel_id:
+            try:
+                videos = youtube.channel(self.channel_id)["videos"]
+                numbers.append(("Channel views, recent videos", f"{sum(v['views'] for v in videos):,}"))
+            except (_http.FetchError, ValueError):
+                pass
+        return numbers
 
     def _brief(self, _: str) -> str:
         collected = brief.collect()
@@ -509,11 +551,11 @@ def _speakable(reply: str) -> str:
 
 
 # Buttons shown under the message box. Without a brain each is a command; with one, the label is the request.
-BUTTONS = {"Market briefing": "/brief", "Where to invest": "/invest", "Stocks to watch": "/screen india",
-           "My applications": "/status", "Go to sleep": "/sleep"}
-_KEYBOARD = {"keyboard": [[{"text": "Market briefing"}, {"text": "Where to invest"}],
-                          [{"text": "Stocks to watch"}, {"text": "My applications"}],
-                          [{"text": "Go to sleep"}]],
+BUTTONS = {"News PDF": "/paper", "Market briefing": "/brief", "Where to invest": "/invest",
+           "Stocks to watch": "/screen india", "My applications": "/status", "Go to sleep": "/sleep"}
+_KEYBOARD = {"keyboard": [[{"text": "News PDF"}, {"text": "Market briefing"}],
+                          [{"text": "Where to invest"}, {"text": "Stocks to watch"}],
+                          [{"text": "My applications"}, {"text": "Go to sleep"}]],
              "resize_keyboard": True, "is_persistent": True}
 PUBLISH_CHOICES = {"Publish public": "/publish public", "Upload private": "/publish private", "Skip": "/skip"}
 _INVEST_WHEN = {"one time": False, "once": False, "lump sum": False, "every month": True, "monthly": True}
@@ -529,6 +571,7 @@ _SPOKEN = (
                 re.IGNORECASE), "/sleep"),
     (re.compile(r"^(?:please )?(?:wake up|wake|are you there|are you awake)\b.*", re.IGNORECASE), "/wake"),
     (re.compile(r"^(?:please )?(?:shut ?down|power ?off|switch off|turn off)\b.*", re.IGNORECASE), "/shutdown"),
+    (re.compile(r"^.*\b(?:pdf|newspaper|paper|edition|news)\b.*$", re.IGNORECASE), "/paper"),
     # Money questions come first: "give me the brief and tell me where to invest 25k" is about investing.
     (re.compile(r"^(.*\b(?:invest(?:ing|ment)?|put (?:my |the |some )?money|stocks? to (?:buy|invest|put))\b.*)$",
                 re.IGNORECASE), "/invest {0}"),
@@ -743,12 +786,20 @@ class Bot:
         reply = self._commander.handle(text, spoken=spoken)
         self.send(reply, choices=self._commander.choices,
                   buttons=had_choices or text.strip().lower().split("@")[0] in ("/start", "/help"))
+        self._send_attachment()
         action = self._commander.take_action()
         if action:
             action()
             return
         if spoken and self._speak:
             self._say(self._commander.say or reply)
+
+    def _send_attachment(self) -> None:
+        attachment = self._commander.take_attachment()
+        if attachment is None:
+            return
+        self._call("sendDocument", data={"chat_id": str(self._owner)},
+                   files={"document": (attachment.name, attachment.read_bytes(), "application/pdf")})
 
     def _say(self, reply: str) -> None:
         from jarvis_sidekick.speech.elevenlabs_say import synthesize
@@ -791,6 +842,7 @@ class Bot:
                 if self._commander.morning_due():
                     self._typing()
                     self.send(self._commander.morning_message())
+                    self._send_attachment()
             except TelegramError as exc:
                 logger.warning("%s; retrying in 10s", exc)
                 time.sleep(10)

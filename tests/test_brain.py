@@ -198,6 +198,7 @@ def test_morning_message_fires_once_a_day_at_the_set_time_and_not_while_asleep()
     assert not commander.morning_due()
     clock[0] = datetime(2026, 11, 19, 7, 31)
     assert commander.morning_due() and not commander.morning_due()
+    commander._paper = lambda _: "edition"  # the PDF is covered in test_paper
     assert commander.morning_message() == "Good morning. Markets are calm."
     clock[0] = datetime(2026, 11, 20, 9, 0)
     commander.handle("/sleep")

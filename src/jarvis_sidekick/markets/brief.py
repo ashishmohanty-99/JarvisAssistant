@@ -32,7 +32,8 @@ def collect(markets: tuple[str, ...] = ("india", "us"), top: int = 5, client: ht
         for symbol, name in symbols.items():
             series = load(symbol)
             if series:
-                index_rows.append({"group": group, "name": name, **indicators.snapshot(series).to_dict()})
+                index_rows.append({"group": group, "name": name, **indicators.snapshot(series).to_dict(),
+                                   "spark": [round(c, 2) for c in series.closes[-60:]]})
 
     screens, movers = {}, {}
     for market in markets:

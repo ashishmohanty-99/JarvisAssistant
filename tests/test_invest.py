@@ -147,4 +147,4 @@ def test_bot_shows_answer_buttons_then_brings_the_main_buttons_back(market):
     assert [b["text"] for b in first["keyboard"][0]] == ["Conservative", "Moderate", "Aggressive"]
     assert first["one_time_keyboard"] is True
     final = say("Moderate", 2)
-    assert final["keyboard"][0][0]["text"] == "Market briefing"  # main buttons restored with the answer
+    assert final["keyboard"][0][0]["text"] == "News PDF"  # main buttons restored with the answer

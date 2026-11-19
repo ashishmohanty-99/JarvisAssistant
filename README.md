@@ -37,6 +37,12 @@ sidekick voice-setup               # points OpenJarvis speech at ElevenLabs, bot
 
 Most commands also work without OpenJarvis (`pip install -e ".[resume,apply]"`): jobs, brief, screen, plan, hustle, scrape, transcribe. Voice chat and `sidekick jarvis ...` need it.
 
+## The news as a PDF
+
+`/paper` in the bot (or the **News PDF** button, or "Jarvis, send me the news"), and `sidekick paper -o brief.pdf` on the command line, produce *The Jarvis Brief*: a two-page A4 morning edition with a one-sentence summary, a tile for each index with its trend line, the day's headlines for India and the world with a short summary and a tappable link, the biggest rises and falls, the momentum screen, and your own numbers. Set `SIDEKICK_MORNING=07:30` to have it arrive every morning.
+
+It is laid out in HTML and printed by the Chromium that is already installed. Headlines and summaries come straight from the news feeds: nothing is rewritten or invented, and a story with no summary in its feed simply shows its headline.
+
 ## One-tap YouTube publishing
 
 Send the bot a video with its title and description, check the summary, tap **Publish public**. Setup on the Google side and what to expect: [deploy/YOUTUBE.md](deploy/YOUTUBE.md).
@@ -160,7 +166,7 @@ Nobody can. The working pattern is: search for what you need (OpenJarvis `web_se
 
 ## Verified, and not yet
 
-Verified by the test suite (`pytest`, 166 tests): the ElevenLabs request format and response parsing against the documented API shape; registration into a real OpenJarvis install and resolution through its speech discovery and tool executor; the form filler against a real Chromium and a local stand-in form (dry run sends nothing, confirm sends, unanswered questions and CAPTCHAs block); scoring, tracker, indicators, plan arithmetic, feed parsing, error paths that must not leak keys; the bot's owner check, backlog skip, rate limit, voice-note limits and one-time confirmation codes.
+Verified by the test suite (`pytest`, 175 tests): the ElevenLabs request format and response parsing against the documented API shape; registration into a real OpenJarvis install and resolution through its speech discovery and tool executor; the form filler against a real Chromium and a local stand-in form (dry run sends nothing, confirm sends, unanswered questions and CAPTCHAs block); scoring, tracker, indicators, plan arithmetic, feed parsing, error paths that must not leak keys; the bot's owner check, backlog skip, rate limit, voice-note limits and one-time confirmation codes.
 
 Run live on an Ubuntu 24.04 cloud server through `/doctor` (19 November 2026): the Telegram bot under its restricted system service, resume upload through the bot, ElevenLabs speech out and back in, Yahoo prices, the news feeds, the Remotive, Arbeitnow and RemoteOK job sources, the YouTube channel feed, and Chromium start-up.
 

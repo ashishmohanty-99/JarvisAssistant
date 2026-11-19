@@ -15,7 +15,8 @@ export DEBIAN_FRONTEND=noninteractive
 echo "== System packages"
 apt-get update -qq
 # libatomic1: needed by the Node runtime bundled with Playwright, and absent from minimal cloud images.
-apt-get install -y -qq python3 python3-venv ca-certificates ufw unattended-upgrades fail2ban libatomic1 >/dev/null
+apt-get install -y -qq python3 python3-venv ca-certificates ufw unattended-upgrades fail2ban libatomic1 \
+    fonts-inter fonts-noto-core >/dev/null   # the two typefaces of the PDF edition
 python3 -c 'import sys; sys.exit(0 if (3, 11) <= sys.version_info[:2] <= (3, 13) else 1)' || {
     echo "Python 3.11 to 3.13 is needed; this server has $(python3 --version). Use Ubuntu 24.04."; exit 1; }
 
