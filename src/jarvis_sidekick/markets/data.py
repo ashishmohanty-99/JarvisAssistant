@@ -1,14 +1,14 @@
-"""Daily price history. Yahoo's chart endpoint first, Stooq CSV as the fallback.
+"""Daily price history from Yahoo's chart endpoint.
 
-Both are free and keyless, and neither is an official, guaranteed feed: Yahoo's
-endpoint is undocumented and can change or rate-limit. Prices are end-of-day or
-delayed. Good enough for research, not for trading decisions on the minute.
+Free and keyless, but not an official, guaranteed feed: the endpoint is
+undocumented and can change or rate-limit. Prices are end-of-day or delayed.
+Good enough for research, not for trading decisions on the minute. There is no
+second source: Stooq, the usual free alternative, now answers scripts with a
+web page instead of data.
 """
 
 from __future__ import annotations
 
-import csv
-import io
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from urllib.parse import quote
@@ -37,8 +37,6 @@ WATCHLISTS = {
     ],
     "etf": ["NIFTYBEES.NS", "JUNIORBEES.NS", "GOLDBEES.NS", "MON100.NS", "SPY", "QQQ", "VXUS"],
 }
-# Stooq uses its own tickers; only symbols listed here can fall back.
-_STOOQ = {"^GSPC": "^spx", "^IXIC": "^ndq", "^DJI": "^dji", "^FTSE": "^ukx", "^N225": "^nkx", "^HSI": "^hsi"}
 
 
 @dataclass
@@ -87,21 +85,5 @@ def _yahoo(symbol: str, range_: str, client: httpx.Client | None) -> Series:
     )
 
 
-def _stooq(symbol: str, client: httpx.Client | None) -> Series:
-    ticker = _STOOQ.get(symbol) or (symbol.lower() + ".us" if symbol.isalpha() else "")
-    if not ticker:
-        raise _http.FetchError(f"no fallback source for {symbol}")
-    text = _http.get("https://stooq.com/q/d/l/", params={"s": ticker, "i": "d"}, client=client).text
-    rows = [r for r in csv.DictReader(io.StringIO(text)) if r.get("Close") not in (None, "", "N/D")]
-    if len(rows) < 2:
-        said = " ".join(text.split())[:80]
-        raise _http.FetchError(f"no price data for {symbol}; Stooq answered: {said!r}")
-    rows = rows[-260:]
-    return Series(symbol, [float(r["Close"]) for r in rows], [r["Date"] for r in rows], source="stooq")
-
-
 def history(symbol: str, range_: str = "1y", client: httpx.Client | None = None) -> Series:
-    try:
-        return _yahoo(symbol, range_, client)
-    except _http.FetchError:
-        return _stooq(symbol, client)
+    return _yahoo(symbol, range_, client)

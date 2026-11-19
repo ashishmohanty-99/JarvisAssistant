@@ -74,13 +74,6 @@ def _prices() -> str:
     return f"NIFTY 50 {series.last:,.2f} on {series.dates[-1]} via {series.source}, {len(series.closes)} days"
 
 
-def _fallback() -> str:
-    from jarvis_sidekick.markets import data
-
-    series = data._stooq("^GSPC", None)
-    return f"S&P 500 {series.last:,.2f} on {series.dates[-1]}"
-
-
 def _news() -> str:
     from jarvis_sidekick.markets import news
 
@@ -188,7 +181,7 @@ def run(offline: bool = False) -> list[Check]:
         ("microphone", _microphone),
     ]
     live: list[tuple[str, Callable[[], str]]] = [
-        ("prices (Yahoo)", _prices), ("prices fallback (Stooq)", _fallback), ("news feeds", _news),
+        ("prices (Yahoo)", _prices), ("news feeds", _news),
         *[(f"jobs: {name}", _job_source(name)) for name in ("remotive", "arbeitnow", "remoteok", "adzuna")],
         ("YouTube channel", _channel), ("ElevenLabs voice", _elevenlabs), ("Telegram bot", _telegram),
     ]

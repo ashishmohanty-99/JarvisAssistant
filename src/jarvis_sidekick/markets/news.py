@@ -13,7 +13,6 @@ from jarvis_sidekick import _http
 FEEDS = {
     "india": {
         "Economic Times Markets": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
-        "Moneycontrol": "https://www.moneycontrol.com/rss/marketreports.xml",
         "Mint Markets": "https://www.livemint.com/rss/markets",
     },
     "world": {

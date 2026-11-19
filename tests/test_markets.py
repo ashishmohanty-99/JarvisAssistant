@@ -88,24 +88,13 @@ def test_history_adds_the_current_quote_when_the_daily_bars_lag():
 
 
 @respx.mock
-def test_stooq_failure_says_what_stooq_answered():
-    respx.get("https://stooq.com/q/d/l/").mock(return_value=httpx.Response(200, text="Get your apikey:\n\n1. Open x"))
-    with pytest.raises(_http.FetchError, match="Stooq answered: 'Get your apikey: 1. Open x'"):
-        data._stooq("^GSPC", None)
-
-
-@respx.mock
-def test_history_falls_back_to_stooq_and_fails_cleanly_without_one():
-    respx.get(YAHOO + "%5EGSPC").mock(return_value=httpx.Response(429))
-    respx.get("https://stooq.com/q/d/l/").mock(
-        return_value=httpx.Response(200, text="Date,Open,High,Low,Close,Volume\n2026-11-17,1,1,1,6000,0\n2026-11-18,1,1,1,6060,0\n")
-    )
-    series = data.history("^GSPC")
-    assert (series.closes, series.source) == ([6000.0, 6060.0], "stooq")
-
+def test_history_fails_cleanly_when_yahoo_has_nothing():
     respx.get(YAHOO + "RELIANCE.NS").mock(return_value=httpx.Response(200, json={"chart": {"result": None}}))
-    with pytest.raises(_http.FetchError, match="no fallback source"):
+    with pytest.raises(_http.FetchError, match="no price data for RELIANCE.NS"):
         data.history("RELIANCE.NS")
+    respx.get(YAHOO + "%5EGSPC").mock(return_value=httpx.Response(429))
+    with pytest.raises(_http.FetchError, match="HTTP 429"):
+        data.history("^GSPC")
 
 
 RSS = b"""<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
@@ -155,7 +144,6 @@ def test_briefing_reports_what_it_got_and_what_it_could_not_get():
         if "TCS.NS" in str(request.url)
         else httpx.Response(200, json=_chart(rising))
     )
-    respx.get(url__startswith="https://stooq.com").mock(return_value=httpx.Response(200, text="No data"))
     respx.get(url__regex=r".*(rss|xml|feeds).*").mock(return_value=httpx.Response(200, content=RSS))
 
     collected = brief.collect(markets=("india",), top=3)

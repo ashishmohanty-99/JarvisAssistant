@@ -127,7 +127,7 @@ Supported forms: Greenhouse and Lever. LinkedIn, Indeed and Naukri are not autom
 
 ## Markets: what it is and is not
 
-Prices come from Yahoo's chart endpoint with Stooq as a fallback. Both are free, keyless, delayed, and unofficial. The screen ranks a watchlist by 3 and 6 month return per unit of volatility, with a penalty below the 200-day average: a well-known momentum factor that says what has been rising steadily, not what will. It ignores valuation and earnings. The plan is rule-based general education for an India-based investor. None of this is personalised investment advice, and nothing here can promise a profit. Edit the watchlists in `markets/data.py`.
+Prices come from Yahoo's chart endpoint: free, keyless, delayed, and unofficial, with no second source behind it. The screen ranks a watchlist by 3 and 6 month return per unit of volatility, with a penalty below the 200-day average: a well-known momentum factor that says what has been rising steadily, not what will. It ignores valuation and earnings. The plan is rule-based general education for an India-based investor. None of this is personalised investment advice, and nothing here can promise a profit. Edit the watchlists in `markets/data.py`.
 
 ## "Scrape the entire internet"
 
@@ -135,9 +135,11 @@ Nobody can. The working pattern is: search for what you need (OpenJarvis `web_se
 
 ## Verified, and not yet
 
-Verified by the test suite (`pytest`, 110 tests): the ElevenLabs request format and response parsing against the documented API shape; registration into a real OpenJarvis install and resolution through its speech discovery and tool executor; the form filler against a real Chromium and a local stand-in form (dry run sends nothing, confirm sends, unanswered questions and CAPTCHAs block); scoring, tracker, indicators, plan arithmetic, feed parsing, error paths that must not leak keys; the bot's owner check, backlog skip, rate limit, voice-note limits and one-time confirmation codes.
+Verified by the test suite (`pytest`, 109 tests): the ElevenLabs request format and response parsing against the documented API shape; registration into a real OpenJarvis install and resolution through its speech discovery and tool executor; the form filler against a real Chromium and a local stand-in form (dry run sends nothing, confirm sends, unanswered questions and CAPTCHAs block); scoring, tracker, indicators, plan arithmetic, feed parsing, error paths that must not leak keys; the bot's owner check, backlog skip, rate limit, voice-note limits and one-time confirmation codes.
 
-Not yet run against the live services, because the build environment had no access to them: ElevenLabs, the job APIs, Yahoo/Stooq, the news feeds, YouTube, Telegram, and real Greenhouse/Lever pages. The macOS service script and the Docker files were written without a Mac or a Docker daemon to run them on. Response parsers follow each provider's published shape; expect small fixes on first live run. See `PLAN.md`.
+Run live on an Ubuntu 24.04 cloud server through `/doctor` (19 November 2026): the Telegram bot under its restricted system service, resume upload through the bot, ElevenLabs speech out and back in, Yahoo prices, the news feeds, the Remotive, Arbeitnow and RemoteOK job sources, the YouTube channel feed, and Chromium start-up.
+
+Not yet run live: Adzuna, the Greenhouse and Lever job boards and their real application forms, the GitHub profile reader, the page reader, voice chat through OpenJarvis with a model, the macOS service script, and the Docker files. Expect small fixes on their first run.
 
 ## Develop
 

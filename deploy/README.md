@@ -55,7 +55,7 @@ Run the bot in one place at a time. Two copies with the same token take turns st
 
 Your resume and application history live on that server: choose a provider and region you are comfortable with, use a long unique password or an SSH key for it, and turn on two-factor sign-in for the provider account.
 
-The installer was run on Ubuntu 24.04 without its firewall and browser-download steps, and the program was started under the service account. The service's systemd restrictions have not been exercised on a live server.
+The installer and the restricted service have been run on a live Ubuntu 24.04 server (2 GB).
 
 ### Docker instead
 
