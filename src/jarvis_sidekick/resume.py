@@ -24,11 +24,26 @@ SKILLS = {
         "Engineering Management", "People Management", "Hiring", "Mentoring", "Stakeholder Management",
         "Architecture", "Distributed Systems", "Event-Driven Architecture", "API Design", "Fintech", "Banking",
         "Agentic", "Vector Search", "Observability", "Claude Code", "Azure DevOps", "OCI", "Infrastructure as Code",
+        "Technical Leadership", "Code Review", "Oracle", "LiteLLM", "Bitbucket", "PMP", "Payments", "Lending",
+        "Fraud Detection", "Roadmap", "Budgeting",
     )
 }
+# Other ways people write the same skill (lower-case) -> the name used above.
+ALIASES = {
+    "genai": "Generative AI", "gen ai": "Generative AI", "llms": "LLM", "large language model": "LLM",
+    "large language models": "LLM", "engineering manager": "Engineering Management",
+    "manager of engineering": "Engineering Management", "tech lead": "Technical Leadership",
+    "technical lead": "Technical Leadership", "event-driven": "Event-Driven Architecture",
+    "architect": "Architecture", "solutions architect": "Architecture", "k8s": "Kubernetes", "postgres": "PostgreSQL",
+    "golang": "Go", "nodejs": "Node.js", "reactjs": "React", "fraud": "Fraud Detection", "ai agent": "AI Agents",
+    "agentic ai": "Agentic", "people manager": "People Management", "stakeholders": "Stakeholder Management",
+    "budget": "Budgeting", "product roadmap": "Roadmap", "code reviews": "Code Review",
+}
+_LOOKUP = {**SKILLS, **ALIASES}
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _PHONE = re.compile(r"(?<!\d)(?:\+?\d[\d\s().-]{8,16}\d)(?!\d)")
 _LINK = re.compile(r"(?:https?://)?(?:www\.)?(linkedin\.com/in/[\w%-]+|github\.com/[\w-]+)", re.IGNORECASE)
+_WRAPPED_LINK = re.compile(r"((?:linkedin\.com/in|github\.com)/[\w%-]*-)[ \t]*\n[ \t]*([\w%-]+)", re.IGNORECASE)
 _YEARS = re.compile(r"(\d{1,2})\+?\s*(?:years|yrs)", re.IGNORECASE)
 
 
@@ -72,9 +87,9 @@ def read_text(path: str | Path) -> str:
 def find_skills(text: str) -> list[str]:
     """Skills from the vocabulary that appear in *text* as whole words or phrases."""
     lowered = text.lower()
-    found = []
-    for key, display in SKILLS.items():
-        if re.search(rf"(?<![\w+#.]){re.escape(key)}(?![\w+#])", lowered):
+    found: list[str] = []
+    for key, display in _LOOKUP.items():
+        if display not in found and re.search(rf"(?<![\w+#.]){re.escape(key)}(?![\w+#])", lowered):
             found.append(display)
     return found
 
@@ -83,7 +98,9 @@ def parse(text: str, path: str = "") -> Profile:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     email = _EMAIL.search(text)
     phone = _PHONE.search(text)
-    links = {m.group(1).split("/")[0].lower(): "https://" + m.group(1) for m in _LINK.finditer(text)}
+    # PDF line wrapping can break a profile address after a hyphen; put it back together first.
+    joined = _WRAPPED_LINK.sub(r"\1\2", text)
+    links = {m.group(1).split("/")[0].lower(): "https://" + m.group(1) for m in _LINK.finditer(joined)}
     # The name is normally the first short line that is not contact details.
     name = next(
         (ln for ln in lines[:5] if len(ln.split()) <= 5 and not _EMAIL.search(ln) and not any(c.isdigit() for c in ln)),

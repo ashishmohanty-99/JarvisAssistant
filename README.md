@@ -37,6 +37,14 @@ sidekick voice-setup               # points OpenJarvis speech at ElevenLabs, bot
 
 Most commands also work without OpenJarvis (`pip install -e ".[resume,apply]"`): jobs, brief, screen, plan, hustle, scrape, transcribe. Voice chat and `sidekick jarvis ...` need it.
 
+## Check your setup
+
+```bash
+sidekick doctor
+```
+
+It tries every integration once (prices, news, each job source, your channel, ElevenLabs, Telegram, the browser, the microphone) and prints `ok`, `FAIL` or `skip` with the reason for each. Missing keys are skipped, not failed. Run it after every change to your `.env`.
+
 ## Use
 
 ```bash
@@ -127,7 +135,7 @@ Nobody can. The working pattern is: search for what you need (OpenJarvis `web_se
 
 ## Verified, and not yet
 
-Verified by the test suite (`pytest`, 95 tests): the ElevenLabs request format and response parsing against the documented API shape; registration into a real OpenJarvis install and resolution through its speech discovery and tool executor; the form filler against a real Chromium and a local stand-in form (dry run sends nothing, confirm sends, unanswered questions and CAPTCHAs block); scoring, tracker, indicators, plan arithmetic, feed parsing, error paths that must not leak keys; the bot's owner check, backlog skip, rate limit, voice-note limits and one-time confirmation codes.
+Verified by the test suite (`pytest`, 100 tests): the ElevenLabs request format and response parsing against the documented API shape; registration into a real OpenJarvis install and resolution through its speech discovery and tool executor; the form filler against a real Chromium and a local stand-in form (dry run sends nothing, confirm sends, unanswered questions and CAPTCHAs block); scoring, tracker, indicators, plan arithmetic, feed parsing, error paths that must not leak keys; the bot's owner check, backlog skip, rate limit, voice-note limits and one-time confirmation codes.
 
 Not yet run against the live services, because the build environment had no access to them: ElevenLabs, the job APIs, Yahoo/Stooq, the news feeds, YouTube, Telegram, and real Greenhouse/Lever pages. The macOS service script and the Docker files were written without a Mac or a Docker daemon to run them on. Response parsers follow each provider's published shape; expect small fixes on first live run. See `PLAN.md`.
 
