@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 import io
 from dataclasses import dataclass
-from datetime import UTC
+from datetime import UTC, date, datetime
 from urllib.parse import quote
 
 import httpx
@@ -54,9 +54,11 @@ class Series:
         return self.closes[-1]
 
 
-def _yahoo(symbol: str, range_: str, client: httpx.Client | None) -> Series:
-    from datetime import datetime
+def _day(stamp: float) -> date:
+    return datetime.fromtimestamp(stamp, tz=UTC).date()
 
+
+def _yahoo(symbol: str, range_: str, client: httpx.Client | None) -> Series:
     data = _http.get_json(
         f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(symbol, safe='')}",
         params={"range": range_, "interval": "1d"},
@@ -70,10 +72,16 @@ def _yahoo(symbol: str, range_: str, client: httpx.Client | None) -> Series:
     pairs = [(t, c) for t, c in zip(stamps, raw) if isinstance(c, (int, float))]
     if len(pairs) < 2:
         raise _http.FetchError(f"no price data for {symbol}")
+    # The daily bars can lag the last close by a session; the quote in "meta" is current. Add it when it is newer.
+    meta = result.get("meta") or {}
+    price, when = meta.get("regularMarketPrice"), meta.get("regularMarketTime")
+    has_quote = isinstance(price, (int, float)) and isinstance(when, (int, float))
+    if has_quote and _day(when) > _day(pairs[-1][0]):
+        pairs.append((when, price))
     return Series(
         symbol=symbol,
         closes=[float(c) for _, c in pairs],
-        dates=[datetime.fromtimestamp(t, tz=UTC).date().isoformat() for t, _ in pairs],
+        dates=[_day(t).isoformat() for t, _ in pairs],
         currency=str((result.get("meta") or {}).get("currency") or ""),
         source="yahoo",
     )
@@ -86,7 +94,8 @@ def _stooq(symbol: str, client: httpx.Client | None) -> Series:
     text = _http.get("https://stooq.com/q/d/l/", params={"s": ticker, "i": "d"}, client=client).text
     rows = [r for r in csv.DictReader(io.StringIO(text)) if r.get("Close") not in (None, "", "N/D")]
     if len(rows) < 2:
-        raise _http.FetchError(f"no price data for {symbol}")
+        said = " ".join(text.split())[:80]
+        raise _http.FetchError(f"no price data for {symbol}; Stooq answered: {said!r}")
     rows = rows[-260:]
     return Series(symbol, [float(r["Close"]) for r in rows], [r["Date"] for r in rows], source="stooq")
 

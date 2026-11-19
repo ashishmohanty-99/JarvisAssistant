@@ -84,17 +84,19 @@ def _fallback() -> str:
 def _news() -> str:
     from jarvis_sidekick.markets import news
 
-    counts = {}
+    counts, dead = {}, []
     for feeds in news.FEEDS.values():
         for source, url in feeds.items():
             try:
                 counts[source] = len(news.parse_feed(_http.get(url, timeout=15.0).content, source))
-            except _http.FetchError:
+                if not counts[source]:
+                    dead.append(f"{source} (answered, no items)")
+            except _http.FetchError as exc:
                 counts[source] = 0
-    dead = [source for source, count in counts.items() if not count]
+                dead.append(f"{source} ({exc})")
     if len(dead) == len(counts):
-        raise RuntimeError("no feed returned any headline")
-    return f"{sum(counts.values())} headlines" + (f"; empty: {', '.join(dead)}" if dead else "")
+        raise RuntimeError("no feed returned any headline: " + "; ".join(dead))
+    return f"{sum(counts.values())} headlines" + (f"; empty: {'; '.join(dead)}" if dead else "")
 
 
 def _job_source(name: str) -> Callable[[], str]:

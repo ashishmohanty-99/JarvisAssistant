@@ -74,6 +74,27 @@ def test_history_reads_yahoo_and_skips_missing_closes():
 
 
 @respx.mock
+def test_history_adds_the_current_quote_when_the_daily_bars_lag():
+    chart = _chart([100.0, 101.0])
+    last_bar = chart["chart"]["result"][0]["timestamp"][-1]
+    chart["chart"]["result"][0]["meta"] = {"regularMarketPrice": 99.5, "regularMarketTime": last_bar + 86_400}
+    respx.get(YAHOO + "%5ENSEI").mock(return_value=httpx.Response(200, json=chart))
+    series = data.history("^NSEI")
+    assert series.closes == [100.0, 101.0, 99.5] and series.dates[-1] == "2025-10-11"
+
+    chart["chart"]["result"][0]["meta"]["regularMarketTime"] = last_bar + 600  # same day: already in the bars
+    respx.get(YAHOO + "%5ENSEI").mock(return_value=httpx.Response(200, json=chart))
+    assert data.history("^NSEI").closes == [100.0, 101.0]
+
+
+@respx.mock
+def test_stooq_failure_says_what_stooq_answered():
+    respx.get("https://stooq.com/q/d/l/").mock(return_value=httpx.Response(200, text="Get your apikey:\n\n1. Open x"))
+    with pytest.raises(_http.FetchError, match="Stooq answered: 'Get your apikey: 1. Open x'"):
+        data._stooq("^GSPC", None)
+
+
+@respx.mock
 def test_history_falls_back_to_stooq_and_fails_cleanly_without_one():
     respx.get(YAHOO + "%5EGSPC").mock(return_value=httpx.Response(429))
     respx.get("https://stooq.com/q/d/l/").mock(

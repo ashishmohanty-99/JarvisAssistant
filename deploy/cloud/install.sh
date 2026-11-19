@@ -34,6 +34,8 @@ mkdir -p "$APP"
 [ -x "$APP/venv/bin/python" ] || python3 -m venv "$APP/venv"
 "$APP/venv/bin/pip" install --quiet --upgrade pip
 "$APP/venv/bin/pip" install --quiet --upgrade "$REPO[resume,apply,youtube]"
+# Same version number, new code: make sure an update really replaces the installed copy.
+"$APP/venv/bin/pip" install --quiet --force-reinstall --no-deps "$REPO"
 
 if [ "${SIDEKICK_SKIP_BROWSER:-}" != "1" ]; then
     echo "== Browser for application forms"
