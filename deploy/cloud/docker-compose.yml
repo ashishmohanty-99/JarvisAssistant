@@ -1,0 +1,25 @@
+# On the server:  docker compose -f deploy/cloud/docker-compose.yml up -d --build
+services:
+  bot:
+    build:
+      context: ../..
+      dockerfile: deploy/cloud/Dockerfile
+    restart: unless-stopped
+    env_file: /etc/jarvis-sidekick/env   # root-owned, chmod 600, never in the repository
+    environment:
+      SIDEKICK_RESUME: /data/resume.pdf
+    volumes:
+      - sidekick-data:/data
+    # Hardening: no inbound ports, no new privileges, no Linux capabilities, read-only root filesystem.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/sidekick
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 2g
+    shm_size: 512m   # Chromium needs shared memory when filling application forms
+
+volumes:
+  sidekick-data:
