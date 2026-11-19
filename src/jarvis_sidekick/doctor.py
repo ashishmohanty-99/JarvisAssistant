@@ -74,6 +74,20 @@ def _prices() -> str:
     return f"NIFTY 50 {series.last:,.2f} on {series.dates[-1]} via {series.source}, {len(series.closes)} days"
 
 
+def _funds() -> str:
+    from jarvis_sidekick.markets import data, invest
+
+    got, missing = [], []
+    for symbol, _, _ in invest.FUNDS.values():
+        try:
+            got.append(f"{symbol.removesuffix('.NS')} {data.history(symbol).last:,.2f}")
+        except _http.FetchError:
+            missing.append(symbol)
+    if missing:
+        raise RuntimeError(f"no price for {', '.join(missing)}" + (f"; got {', '.join(got)}" if got else ""))
+    return ", ".join(got)
+
+
 def _news() -> str:
     from jarvis_sidekick.markets import news
 
@@ -206,7 +220,7 @@ def run(offline: bool = False) -> list[Check]:
         ("microphone", _microphone),
     ]
     live: list[tuple[str, Callable[[], str]]] = [
-        ("prices (Yahoo)", _prices), ("news feeds", _news),
+        ("prices (Yahoo)", _prices), ("fund prices for /invest", _funds), ("news feeds", _news),
         *[(f"jobs: {name}", _job_source(name)) for name in ("remotive", "arbeitnow", "remoteok", "adzuna")],
         ("YouTube channel", _channel), ("ElevenLabs voice", _elevenlabs), ("Claude (conversation)", _brain),
         ("Telegram bot", _telegram),

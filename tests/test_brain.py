@@ -178,7 +178,8 @@ def test_with_a_brain_a_spoken_sentence_is_a_conversation_not_a_command():
     said = "Give me the market briefing and tell me which stocks to put money in"
     assert commander.handle(f"Jarvis, {said}", spoken=True) == "Yes, Master.\nHere is my view."
     assert heard == [said]  # not shortened to /brief
-    assert Commander().handle(said, spoken=True).startswith(("# Market briefing", "No market data", "/brief failed"))
+    # without a brain the same sentence is matched to the nearest command instead
+    assert Commander().handle(said, spoken=True) == "How much do you want to invest? For example: 25000"
 
 
 def test_buttons_are_commands_without_a_brain_and_requests_with_one(monkeypatch):

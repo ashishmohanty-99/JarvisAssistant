@@ -446,7 +446,7 @@ def test_it_shows_typing_and_offers_buttons_on_help(telegram):
     assert telegram.typing.called and "reply_markup" not in json.loads(telegram.sent.calls.last.request.content)
     bot.process(_message("/help", update_id=2))
     keyboard = json.loads(telegram.sent.calls.last.request.content)["reply_markup"]["keyboard"]
-    assert [button["text"] for row in keyboard for button in row] == list(botmod.BUTTONS)
+    assert sorted(button["text"] for row in keyboard for button in row) == sorted(botmod.BUTTONS)
 
 
 def test_with_a_brain_the_control_phrases_and_guards_still_hold(prepared):

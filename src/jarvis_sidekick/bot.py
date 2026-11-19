@@ -37,7 +37,7 @@ import httpx
 from jarvis_sidekick import _http, common, paths
 from jarvis_sidekick.jobs import apply, match, sources
 from jarvis_sidekick.jobs.tracker import Tracker
-from jarvis_sidekick.markets import brief, data, indicators, plan
+from jarvis_sidekick.markets import brief, data, indicators, invest, plan
 from jarvis_sidekick.profile import youtube
 
 logger = logging.getLogger(__name__)
@@ -63,6 +63,7 @@ HELP = """Commands (type them, or say them in a voice note):
 /channel - your YouTube channel's recent videos and views
 /doctor - check every connection (prices, news, jobs, voice, browser)
 Send a PDF or .docx to set the resume you apply with.
+/invest [amount] - where to put a sum of money: funds, stock ideas and quantities
 /plan <monthly> <years> [conservative|moderate|aggressive]
 /memory - what I remember about you; /forget - wipe it and our conversation
 /sleep - stop answering until you say "Jarvis" (or /wake)
@@ -100,6 +101,8 @@ class Commander:
     agent: Callable[[str], str] | None = None
     clock: Callable[[], float] = time.monotonic
     pending: Pending | None = field(default=None, init=False)
+    choices: list[str] = field(default_factory=list, init=False)  # answer buttons for the reply just given
+    _invest: dict | None = field(default=None, init=False)
 
     def handle(self, text: str, *, spoken: bool = False) -> str:
         """Answer one message. Afterwards ``self.say`` holds a short version fit for speaking aloud."""
@@ -119,7 +122,7 @@ class Commander:
         if called and not text:
             self.say = f"{self.greeting()}, {self.title}. What do you need?"
             return self.say
-        self.say = ""
+        self.say, self.choices = "", []
         reply = self._dispatch(text, spoken)
         if called:
             reply = f"Yes, {self.title}.\n{reply}"
@@ -165,7 +168,12 @@ class Commander:
                 "provider's control panel and I will message you when I am back.")
 
     def _dispatch(self, text: str, spoken: bool) -> str:
-        if text in BUTTONS and (not self.conversational or BUTTONS[text] in _CONTROL):
+        if self._invest is not None and not text.startswith("/"):
+            answered = self._invest_answer(text)
+            if answered is not None:
+                return answered
+        self._invest = None  # anything else ends an unfinished /invest conversation
+        if text in BUTTONS and (not self.conversational or BUTTONS[text] in _CONTROL or text == "Where to invest"):
             text = BUTTONS[text]  # a tapped button; with a brain the label itself is the request
         elif spoken:
             text = _spoken_to_command(text, control_only=self.conversational)
@@ -173,6 +181,9 @@ class Commander:
                 return "To power off the server, type /shutdown. To pause me, say: go to sleep."
         elif self.conversational and _spoken_to_command(text, control_only=True) == "/sleep":
             text = "/sleep"  # "go to sleep" typed as a sentence
+        elif not self.conversational and not text.startswith("/"):
+            mapped = _spoken_to_command(text)  # a typed sentence works like a spoken one
+            text = text if mapped == "/shutdown" else mapped  # powering off needs the literal command
         if not text.startswith("/"):
             return self._ask(text)
         name, _, rest = text.partition(" ")
@@ -186,7 +197,7 @@ class Commander:
             "/jobs": self._jobs, "/apply": self._apply, "/status": self._status, "/plan": self._plan,
             "/channel": self._channel, "/doctor": self._doctor, "/sleep": self._sleep,
             "/wake": lambda _: f"I am awake, {self.title}.", "/shutdown": self._shutdown,
-            "/forget": self._forget, "/memory": self._memory,
+            "/forget": self._forget, "/memory": self._memory, "/invest": self._invest_start,
         }.get(name)
         if handler is None:
             return "Unknown command.\n" + HELP
@@ -207,6 +218,52 @@ class Commander:
         if self.agent is None:
             return "I only know commands until a language model is configured (ANTHROPIC_API_KEY).\n" + HELP
         return self.agent(text)
+
+    # ---- /invest: a short conversation with buttons, no language model needed
+
+    def _invest_start(self, rest: str) -> str:
+        words = rest.lower()
+        self._invest = {
+            "amount": invest.parse_amount(rest),
+            "monthly": True if re.search(r"\b(monthly|every month|each month|per month|sip)\b", words)
+            else False if re.search(r"\b(once|one time|one-time|lump ?sum)\b", words) else None,
+            "risk": next((r for r in invest.SPLITS if r in words), None),
+        }
+        return self._invest_next()
+
+    def _invest_answer(self, text: str) -> str | None:
+        """Use *text* as the answer to the pending question, or return None if it is not one."""
+        state, answer = self._invest, text.strip().lower().rstrip(".!")
+        if state["amount"] is None:
+            state["amount"] = invest.parse_amount(text)
+            if state["amount"] is None:
+                return None
+        elif state["monthly"] is None:
+            if answer not in _INVEST_WHEN:
+                return None
+            state["monthly"] = _INVEST_WHEN[answer]
+        elif state["risk"] is None:
+            risk = next((r for r in invest.SPLITS if answer.startswith(r)), None)
+            if risk is None:
+                return None
+            state["risk"] = risk
+        return self._invest_next()
+
+    def _invest_next(self) -> str:
+        state = self._invest
+        if state["amount"] is None:
+            return "How much do you want to invest? For example: 25000"
+        if state["monthly"] is None:
+            self.choices = ["One time", "Every month"]
+            return f"Rs {state['amount']:,.0f}. Is that one time, or every month?"
+        if state["risk"] is None:
+            self.choices = ["Conservative", "Moderate", "Aggressive"]
+            return ("How much of a fall could you sit through without selling?\n"
+                    "Conservative: about 10%. Moderate: about 20%. Aggressive: 30% or more.")
+        self._invest = None
+        suggestion = invest.suggest(state["amount"], state["risk"], monthly=state["monthly"])
+        self.say = invest.to_speech(suggestion, self.title)
+        return invest.to_text(suggestion, self.title)
 
     def _forget(self, _: str) -> str:
         return self.brain.forget() if self.brain else "There is nothing to forget: no language model is configured."
@@ -362,11 +419,13 @@ def _speakable(reply: str) -> str:
 
 
 # Buttons shown under the message box. Without a brain each is a command; with one, the label is the request.
-BUTTONS = {"Market briefing": "/brief", "Stocks to watch": "/screen india", "My applications": "/status",
-           "Go to sleep": "/sleep"}
-_KEYBOARD = {"keyboard": [[{"text": "Market briefing"}, {"text": "Stocks to watch"}],
-                          [{"text": "My applications"}, {"text": "Go to sleep"}]],
+BUTTONS = {"Market briefing": "/brief", "Where to invest": "/invest", "Stocks to watch": "/screen india",
+           "My applications": "/status", "Go to sleep": "/sleep"}
+_KEYBOARD = {"keyboard": [[{"text": "Market briefing"}, {"text": "Where to invest"}],
+                          [{"text": "Stocks to watch"}, {"text": "My applications"}],
+                          [{"text": "Go to sleep"}]],
              "resize_keyboard": True, "is_persistent": True}
+_INVEST_WHEN = {"one time": False, "once": False, "lump sum": False, "every month": True, "monthly": True}
 POWEROFF_REQUEST = "poweroff.request"  # watched by a root-owned systemd unit on the server install
 
 
@@ -379,6 +438,9 @@ _SPOKEN = (
                 re.IGNORECASE), "/sleep"),
     (re.compile(r"^(?:please )?(?:wake up|wake|are you there|are you awake)\b.*", re.IGNORECASE), "/wake"),
     (re.compile(r"^(?:please )?(?:shut ?down|power ?off|switch off|turn off)\b.*", re.IGNORECASE), "/shutdown"),
+    # Money questions come first: "give me the brief and tell me where to invest 25k" is about investing.
+    (re.compile(r"^(.*\b(?:invest(?:ing|ment)?|put (?:my |the |some )?money|stocks? to (?:buy|invest|put))\b.*)$",
+                re.IGNORECASE), "/invest {0}"),
     (re.compile(r"^(?:give me |send |get )?(?:the |my |a )?(?:market |morning |daily )?brief(?:ing)?\b.*", re.IGNORECASE), "/brief"),
     (re.compile(r"^(?:show |get )?(?:my )?(?:application )?status\b.*", re.IGNORECASE), "/status"),
     (re.compile(r"^(?:find|search|look for)(?: me)?(?: some)? (?:jobs? (?:for|as) )?(.+?)(?: jobs?)?$", re.IGNORECASE), "/jobs {0}"),
@@ -455,11 +517,14 @@ class Bot:
             raise TelegramError(f"Telegram {method} was rejected (HTTP {response.status_code})")
         return payload
 
-    def send(self, text: str, *, buttons: bool = False) -> None:
+    def send(self, text: str, *, buttons: bool = False, choices: list[str] | None = None) -> None:
         for start in range(0, len(text) or 1, 4000):
             payload = {"chat_id": self._owner, "text": text[start:start + 4000] or "(empty)",
                        "disable_web_page_preview": True}
-            if buttons:
+            if choices:  # answer buttons for a question; the main buttons come back with the next reply
+                payload["reply_markup"] = {"keyboard": [[{"text": c} for c in choices]], "resize_keyboard": True,
+                                           "one_time_keyboard": True}
+            elif buttons:
                 payload["reply_markup"] = _KEYBOARD
             self._call("sendMessage", json=payload)
 
@@ -568,8 +633,10 @@ class Bot:
         if spoken:
             self.send(f"Heard: {text}")
         self._typing()
+        had_choices = bool(self._commander.choices)
         reply = self._commander.handle(text, spoken=spoken)
-        self.send(reply, buttons=text.strip().lower().split("@")[0] in ("/start", "/help"))
+        self.send(reply, choices=self._commander.choices,
+                  buttons=had_choices or text.strip().lower().split("@")[0] in ("/start", "/help"))
         action = self._commander.take_action()
         if action:
             action()
