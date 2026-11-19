@@ -39,9 +39,15 @@ mkdir -p "$APP"
 "$APP/venv/bin/pip" install --quiet --force-reinstall --no-deps "$REPO"
 
 if [ "${SIDEKICK_SKIP_BROWSER:-}" != "1" ]; then
-    echo "== Browser for application forms"
-    "$APP/venv/bin/playwright" install-deps chromium >/dev/null
-    PLAYWRIGHT_BROWSERS_PATH="$APP/browsers" "$APP/venv/bin/playwright" install chromium >/dev/null
+    echo "== Browser for application forms and the PDF edition"
+    # The browser's system libraries come from Ubuntu's package servers. They only need installing once,
+    # and a server that is briefly unreachable must not stop an update of the program itself.
+    if ! ls "$APP/browsers"/chromium-* >/dev/null 2>&1 || [ "${SIDEKICK_REINSTALL_BROWSER:-}" = "1" ]; then
+        "$APP/venv/bin/playwright" install-deps chromium >/dev/null ||
+            echo "WARNING: could not install the browser's system libraries (package server unreachable?). Run this again later."
+    fi
+    PLAYWRIGHT_BROWSERS_PATH="$APP/browsers" "$APP/venv/bin/playwright" install chromium >/dev/null ||
+        echo "WARNING: could not download the browser. /apply and /paper will not work until this succeeds; run this again later."
 fi
 
 echo "== Settings"
