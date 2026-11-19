@@ -286,6 +286,25 @@ def brief_cmd(markets: tuple[str, ...], send: str | None, speak: str | None, as_
         raise click.ClickException(str(exc)) from None
 
 
+@main.command("paper")
+@click.option("-o", "--output", default="jarvis-brief.pdf", show_default=True, type=click.Path(dir_okay=False))
+def paper_cmd(output: str) -> None:
+    """Today's news and markets as a designed, printable PDF."""
+    from datetime import datetime
+
+    from jarvis_sidekick import paper
+    from jarvis_sidekick.markets import brief
+
+    collected = brief.collect(("india",))
+    if not collected["indices"] and not any(collected["news"].values()):
+        raise click.ClickException("No market data or news could be fetched. Check your network access.")
+    try:
+        page = paper.build_html(collected, now=datetime.now().astimezone(), title=os.environ.get("SIDEKICK_TITLE", ""))
+        click.echo(paper.render_pdf(page, Path(output)))
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from None
+
+
 @main.command("screen")
 @click.option("--market", default="india", show_default=True, type=click.Choice(["india", "us", "etf"]))
 @click.option("--symbol", "symbols", multiple=True, help="Yahoo symbol, e.g. TCS.NS. Repeatable.")

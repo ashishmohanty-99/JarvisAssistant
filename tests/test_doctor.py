@@ -37,7 +37,6 @@ def test_live_run_reports_each_service_separately(monkeypatch):
     chart = {"chart": {"result": [{"meta": {}, "timestamp": [1_760_000_000 + 86_400 * i for i in range(30)],
                                    "indicators": {"quote": [{"close": rising}]}}]}}
     respx.get(url__startswith="https://query1.finance.yahoo.com").mock(return_value=httpx.Response(200, json=chart))
-    respx.get(url__startswith="https://stooq.com").mock(return_value=httpx.Response(200, text="No data"))
     respx.get("https://remotive.com/api/remote-jobs").mock(
         return_value=httpx.Response(200, json={"jobs": [{"url": "https://r.example/1", "title": "Engineer",
                                                          "description": "Python"}]})
@@ -49,7 +48,6 @@ def test_live_run_reports_each_service_separately(monkeypatch):
     checks = _by_name(doctor.run())
 
     assert checks["prices (Yahoo)"].status == doctor.OK and "129.00" in checks["prices (Yahoo)"].detail
-    assert checks["prices fallback (Stooq)"].status == doctor.FAIL
     assert checks["news feeds"].status == doctor.FAIL
     assert checks["jobs: remotive"].detail == "1 listings, 1 with a description"
     assert checks["jobs: arbeitnow"].status == doctor.FAIL

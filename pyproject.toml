@@ -23,7 +23,9 @@ voice = ["sounddevice>=0.5", "soundfile>=0.12", "numpy>=1.24"]
 resume = ["pypdf>=5", "python-docx>=1.1"]
 apply = ["playwright>=1.40"]
 youtube = ["youtube-transcript-api>=1.0"]
-dev = ["pytest>=8", "respx>=0.22", "ruff>=0.4"]
+# The conversational brain: Claude through the official SDK.
+brain = ["anthropic>=2.10,<3"]
+dev = ["pytest>=8", "respx>=0.22", "ruff>=0.4", "anthropic>=2.10,<3"]
 
 [project.urls]
 Repository = "https://github.com/ashishmohanty-99/JarvisAssistant"

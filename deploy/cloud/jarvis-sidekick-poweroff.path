@@ -1,0 +1,9 @@
+[Unit]
+Description=Jarvis sidekick: watch for a power-off request from the bot
+
+[Path]
+PathExists=/var/lib/jarvis-sidekick/poweroff.request
+Unit=jarvis-sidekick-poweroff.service
+
+[Install]
+WantedBy=multi-user.target

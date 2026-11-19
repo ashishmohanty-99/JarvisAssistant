@@ -1,0 +1,7 @@
+[Unit]
+Description=Jarvis sidekick: power the server off on the owner's /shutdown
+
+[Service]
+Type=oneshot
+# Remove the request first, and power off only if that worked, so a leftover file can never cause a boot loop.
+ExecStart=/bin/sh -c 'rm -f /var/lib/jarvis-sidekick/poweroff.request && [ ! -e /var/lib/jarvis-sidekick/poweroff.request ] && systemctl poweroff'

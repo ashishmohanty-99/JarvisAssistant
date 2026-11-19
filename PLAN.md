@@ -26,11 +26,17 @@ Goal: one assistant you talk to that reads the web, hunts jobs against your resu
 - [x] Private Telegram bot: commands and voice notes from a phone or tablet, owner-only, one-time codes to send
 - [x] Job search across several countries and acceptable places
 - [x] Content rule checker for drafts; YouTube channel report (`sidekick channel`, `/channel`)
-- [x] Deployment: macOS login service, hardened Docker container for a cloud server
-- [x] Nine OpenJarvis tools; 100 tests; lint clean; `SECURITY.md` threat table
+- [x] Deployment: macOS login service; one-command Ubuntu server install with a restricted system service; Docker files
+- [x] Resume by sending the file to the bot; `/doctor` from the phone
+- [x] `/invest`: a rule-based split of a sum into funds and stock ideas with quantities, asked with buttons
+- [x] The Jarvis screen: orb, push-to-talk voice, spoken answers, buttons and a live market board, behind a private network and a Telegram sign-in code
+- [x] The briefing as a designed PDF edition (`/paper`), optionally every morning
+- [x] One-tap YouTube publishing of a video sent to the bot (stage 1)
+- [x] Conversation through Claude with read-only tools, memory, tap buttons, typing indicator, optional morning message
+- [x] Nine OpenJarvis tools; 205 tests; lint clean; `SECURITY.md` threat table
 
 ### Phase 2: first live run (needs your keys and machine)
-- [ ] Run each command against the live services and fix any parser drift (ElevenLabs, job APIs, Yahoo/Stooq, feeds, YouTube)
+- [ ] Run each command against the live services and fix any parser drift (ElevenLabs, job APIs, Yahoo, feeds, YouTube)
 - [ ] Try the form filler on three real Greenhouse and three real Lever postings in dry-run mode; extend selectors
 - [ ] Add Ashby and Workday form adapters if your target employers use them
 - [ ] Schedule the morning briefing (cron or `jarvis scheduler`)
@@ -39,6 +45,7 @@ Goal: one assistant you talk to that reads the web, hunts jobs against your resu
 - [ ] Japan: collect Greenhouse/Lever board names of target employers
 
 ### Phase 3: make it yours
+- [ ] YouTube stage 2: pick up the daily video and its text automatically, so nothing is forwarded by hand
 - [ ] Side business: add channel numbers and open publishing tasks to the morning briefing; run `content check` over each day's drafts before they reach you
 - [ ] LLM-written cover letters and screening answers, grounded in the resume, reviewed before use
 - [ ] Portfolio tracking: holdings file, allocation drift alerts, fundamentals (P/E, earnings growth) in the screen

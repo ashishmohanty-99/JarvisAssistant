@@ -46,10 +46,12 @@ def _need(*names: str) -> None:
 
 
 def _resume() -> str:
-    _need("SIDEKICK_RESUME")
-    from jarvis_sidekick import resume
+    from jarvis_sidekick import common, resume
 
-    profile = resume.load(os.environ["SIDEKICK_RESUME"])
+    path = os.environ.get("SIDEKICK_RESUME") or common.stored_resume()
+    if not path:
+        raise _Skip("send your resume to the bot as a PDF, or set SIDEKICK_RESUME")
+    profile = resume.load(path)
     if not (profile.name and profile.email):
         raise ValueError("could not find a name and an email in the resume")
     return f"name, email{', phone' if profile.phone else ''} found; {len(profile.skills)} skills recognised"
@@ -72,27 +74,36 @@ def _prices() -> str:
     return f"NIFTY 50 {series.last:,.2f} on {series.dates[-1]} via {series.source}, {len(series.closes)} days"
 
 
-def _fallback() -> str:
-    from jarvis_sidekick.markets import data
+def _funds() -> str:
+    from jarvis_sidekick.markets import data, invest
 
-    series = data._stooq("^GSPC", None)
-    return f"S&P 500 {series.last:,.2f} on {series.dates[-1]}"
+    got, missing = [], []
+    for symbol, _, _ in invest.FUNDS.values():
+        try:
+            got.append(f"{symbol.removesuffix('.NS')} {data.history(symbol).last:,.2f}")
+        except _http.FetchError:
+            missing.append(symbol)
+    if missing:
+        raise RuntimeError(f"no price for {', '.join(missing)}" + (f"; got {', '.join(got)}" if got else ""))
+    return ", ".join(got)
 
 
 def _news() -> str:
     from jarvis_sidekick.markets import news
 
-    counts = {}
+    counts, dead = {}, []
     for feeds in news.FEEDS.values():
         for source, url in feeds.items():
             try:
                 counts[source] = len(news.parse_feed(_http.get(url, timeout=15.0).content, source))
-            except _http.FetchError:
+                if not counts[source]:
+                    dead.append(f"{source} (answered, no items)")
+            except _http.FetchError as exc:
                 counts[source] = 0
-    dead = [source for source, count in counts.items() if not count]
+                dead.append(f"{source} ({exc})")
     if len(dead) == len(counts):
-        raise RuntimeError("no feed returned any headline")
-    return f"{sum(counts.values())} headlines" + (f"; empty: {', '.join(dead)}" if dead else "")
+        raise RuntimeError("no feed returned any headline: " + "; ".join(dead))
+    return f"{sum(counts.values())} headlines" + (f"; empty: {'; '.join(dead)}" if dead else "")
 
 
 def _job_source(name: str) -> Callable[[], str]:
@@ -128,6 +139,42 @@ def _elevenlabs() -> str:
     if "check" not in heard.lower():
         raise RuntimeError(f"spoke and transcribed, but heard {heard!r}")
     return f"spoke {len(audio):,} bytes and heard it back: {heard!r}"
+
+
+def _brain() -> str:
+    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
+        raise _Skip("set ANTHROPIC_API_KEY for conversation; without it the bot only knows commands")
+    try:
+        import anthropic
+    except ImportError:
+        raise _Skip("pip install 'jarvis-sidekick[brain]'") from None
+    from jarvis_sidekick.brain import DEFAULT_MODEL
+
+    model = os.environ.get("SIDEKICK_MODEL", "").strip() or DEFAULT_MODEL
+    try:
+        response = anthropic.Anthropic(timeout=60.0).messages.create(
+            model=model, max_tokens=2000, output_config={"effort": "low"},
+            messages=[{"role": "user", "content": "Reply with the single word: ready"}],
+        )
+    except anthropic.AuthenticationError:
+        raise RuntimeError("the key was rejected") from None
+    except anthropic.APIStatusError as exc:
+        raise RuntimeError(f"{model} answered HTTP {exc.status_code}") from None
+    except anthropic.APIConnectionError:
+        raise RuntimeError("could not reach the Claude API") from None
+    said = " ".join(b.text for b in response.content if b.type == "text").strip()
+    return f"{response.model} answered {said!r}"
+
+
+def _youtube_publish() -> str:
+    _need("YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET")
+    from jarvis_sidekick import publish
+
+    if not publish.connected():
+        raise _Skip("client is set; send /youtube to the bot to connect your channel")
+    with httpx.Client(timeout=30.0) as client:
+        publish._access_token(client)  # proves the saved sign-in still works; uploads nothing
+    return "channel connected and the sign-in is valid"
 
 
 def _telegram() -> str:
@@ -184,8 +231,9 @@ def run(offline: bool = False) -> list[Check]:
         ("microphone", _microphone),
     ]
     live: list[tuple[str, Callable[[], str]]] = [
-        ("prices (Yahoo)", _prices), ("prices fallback (Stooq)", _fallback), ("news feeds", _news),
+        ("prices (Yahoo)", _prices), ("fund prices for /invest", _funds), ("news feeds", _news),
         *[(f"jobs: {name}", _job_source(name)) for name in ("remotive", "arbeitnow", "remoteok", "adzuna")],
-        ("YouTube channel", _channel), ("ElevenLabs voice", _elevenlabs), ("Telegram bot", _telegram),
+        ("YouTube channel", _channel), ("ElevenLabs voice", _elevenlabs), ("Claude (conversation)", _brain),
+        ("YouTube publishing", _youtube_publish), ("Telegram bot", _telegram),
     ]
     return [_run(name, function) for name, function in (local if offline else local + live)]

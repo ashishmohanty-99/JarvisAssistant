@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from email.utils import parsedate_to_datetime
 
 import httpx
 from lxml import etree
+from lxml import html as lxml_html
 
 from jarvis_sidekick import _http
 
 FEEDS = {
     "india": {
         "Economic Times Markets": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
-        "Moneycontrol": "https://www.moneycontrol.com/rss/marketreports.xml",
         "Mint Markets": "https://www.livemint.com/rss/markets",
     },
     "world": {
@@ -30,9 +31,24 @@ class Headline:
     link: str
     source: str
     published: str = ""
+    summary: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _plain(text: str | None, title: str, limit: int = 240) -> str:
+    """A feed's description as one plain sentence or two: no markup, no repeat of the title, cut at a word."""
+    text = text or ""
+    if "<" in text:
+        try:
+            text = lxml_html.fromstring(f"<div>{text}</div>").text_content()
+        except (etree.LxmlError, ValueError):
+            text = re.sub(r"<[^>]+>", " ", text)
+    text = " ".join(text.split())
+    if not text or text.lower() == title.lower():
+        return ""
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
 
 def parse_feed(xml: bytes, source: str) -> list[Headline]:
@@ -59,7 +75,9 @@ def parse_feed(xml: bytes, source: str) -> list[Headline]:
         except (TypeError, ValueError):
             pass  # Atom dates are already ISO 8601
         if title and link.startswith(("http://", "https://")):
-            items.append(Headline(title=title, link=link, source=source, published=stamp))
+            blurb = next((fields[k] for k in ("description", "summary", "content") if k in fields), None)
+            items.append(Headline(title=title, link=link, source=source, published=stamp,
+                                  summary=_plain(blurb.text if blurb is not None else "", title)))
     return items
 
 
