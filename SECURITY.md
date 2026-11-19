@@ -18,6 +18,7 @@ No software can promise it "cannot be hacked". What this project does is keep th
 | Someone floods the bot to run up your ElevenLabs bill | 20 messages a minute; voice notes capped at 2 minutes and 5 MB; spoken replies capped at 2,500 characters. |
 | A web page, headline or job listing tells the language model to do something | The model's tools only read. It has no tool that applies, sends, powers off, runs a command or writes a file, so the worst a hostile page can do is make an answer wrong. It can save a note about you; `/memory` shows the notes and `/forget` clears them. |
 | Runaway spending on the language model | 150 conversations a day, 6 tool rounds per message, 3 web searches per message, and the 20-messages-a-minute limit. Set a monthly spend limit on the API key as well. |
+| Something publishes to your YouTube channel without you | Each upload needs your own tap or typed `/publish` for that video. A voice note cannot publish, a stranger's message is dropped, and the language model has no publishing tool. Drafts that break your content rules cannot be published at all. |
 | Someone powers your server off | `/shutdown` is answered for the owner only and must be typed, never spoken. The bot cannot power off by itself: it leaves a request file that a separate root-owned unit acts on, and that unit can do nothing else. |
 | Runaway applications | 10 a day, never twice to the same job, never past a CAPTCHA or an unanswered required question. |
 
@@ -33,6 +34,7 @@ No software can promise it "cannot be hacked". What this project does is keep th
 
 - Telegram can read bot messages (bots are not end-to-end encrypted). Do not send passwords or identity numbers through it.
 - Anthropic receives what you say to the bot, its notes about you, and the data its tools fetch, when a Claude key is configured.
+- The saved YouTube sign-in lets the server manage your channel. Anyone with root on the server could use it; `/youtube disconnect` and Google's third-party access page revoke it.
 - ElevenLabs receives your voice notes and the text it speaks. Job sites receive what you apply with.
 - If someone has your unlocked phone or your Telegram session, they are you. The one-time code does not help then: it is shown in the same chat.
 - Market data is unofficial and can be wrong or late.

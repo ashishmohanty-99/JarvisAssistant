@@ -166,6 +166,17 @@ def _brain() -> str:
     return f"{response.model} answered {said!r}"
 
 
+def _youtube_publish() -> str:
+    _need("YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET")
+    from jarvis_sidekick import publish
+
+    if not publish.connected():
+        raise _Skip("client is set; send /youtube to the bot to connect your channel")
+    with httpx.Client(timeout=30.0) as client:
+        publish._access_token(client)  # proves the saved sign-in still works; uploads nothing
+    return "channel connected and the sign-in is valid"
+
+
 def _telegram() -> str:
     _need("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
     from jarvis_sidekick.bot import Bot, Commander
@@ -223,6 +234,6 @@ def run(offline: bool = False) -> list[Check]:
         ("prices (Yahoo)", _prices), ("fund prices for /invest", _funds), ("news feeds", _news),
         *[(f"jobs: {name}", _job_source(name)) for name in ("remotive", "arbeitnow", "remoteok", "adzuna")],
         ("YouTube channel", _channel), ("ElevenLabs voice", _elevenlabs), ("Claude (conversation)", _brain),
-        ("Telegram bot", _telegram),
+        ("YouTube publishing", _youtube_publish), ("Telegram bot", _telegram),
     ]
     return [_run(name, function) for name, function in (local if offline else local + live)]

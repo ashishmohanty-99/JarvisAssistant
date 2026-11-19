@@ -29,8 +29,9 @@ Goal: one assistant you talk to that reads the web, hunts jobs against your resu
 - [x] Deployment: macOS login service; one-command Ubuntu server install with a restricted system service; Docker files
 - [x] Resume by sending the file to the bot; `/doctor` from the phone
 - [x] `/invest`: a rule-based split of a sum into funds and stock ideas with quantities, asked with buttons
+- [x] One-tap YouTube publishing of a video sent to the bot (stage 1)
 - [x] Conversation through Claude with read-only tools, memory, tap buttons, typing indicator, optional morning message
-- [x] Nine OpenJarvis tools; 152 tests; lint clean; `SECURITY.md` threat table
+- [x] Nine OpenJarvis tools; 166 tests; lint clean; `SECURITY.md` threat table
 
 ### Phase 2: first live run (needs your keys and machine)
 - [ ] Run each command against the live services and fix any parser drift (ElevenLabs, job APIs, Yahoo, feeds, YouTube)
@@ -42,6 +43,7 @@ Goal: one assistant you talk to that reads the web, hunts jobs against your resu
 - [ ] Japan: collect Greenhouse/Lever board names of target employers
 
 ### Phase 3: make it yours
+- [ ] YouTube stage 2: pick up the daily video and its text automatically, so nothing is forwarded by hand
 - [ ] Side business: add channel numbers and open publishing tasks to the morning briefing; run `content check` over each day's drafts before they reach you
 - [ ] LLM-written cover letters and screening answers, grounded in the resume, reviewed before use
 - [ ] Portfolio tracking: holdings file, allocation drift alerts, fundamentals (P/E, earnings growth) in the screen

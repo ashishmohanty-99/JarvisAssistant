@@ -34,7 +34,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
-from jarvis_sidekick import _http, common, paths
+from jarvis_sidekick import _http, common, paths, publish
 from jarvis_sidekick.jobs import apply, match, sources
 from jarvis_sidekick.jobs.tracker import Tracker
 from jarvis_sidekick.markets import brief, data, indicators, invest, plan
@@ -63,6 +63,7 @@ HELP = """Commands (type them, or say them in a voice note):
 /channel - your YouTube channel's recent videos and views
 /doctor - check every connection (prices, news, jobs, voice, browser)
 Send a PDF or .docx to set the resume you apply with.
+/youtube - connect your channel; then send a video and tap Publish
 /invest [amount] - where to put a sum of money: funds, stock ideas and quantities
 /plan <monthly> <years> [conservative|moderate|aggressive]
 /memory - what I remember about you; /forget - wipe it and our conversation
@@ -103,6 +104,8 @@ class Commander:
     pending: Pending | None = field(default=None, init=False)
     choices: list[str] = field(default_factory=list, init=False)  # answer buttons for the reply just given
     _invest: dict | None = field(default=None, init=False)
+    _awaiting_video_text: bool = field(default=False, init=False)
+    youtube_login: publish.DeviceLogin | None = field(default=None, init=False)
 
     def handle(self, text: str, *, spoken: bool = False) -> str:
         """Answer one message. Afterwards ``self.say`` holds a short version fit for speaking aloud."""
@@ -173,6 +176,10 @@ class Commander:
             if answered is not None:
                 return answered
         self._invest = None  # anything else ends an unfinished /invest conversation
+        if not spoken and text in PUBLISH_CHOICES:
+            text = PUBLISH_CHOICES[text]  # a tapped button; a voice note can never publish
+        elif not spoken and self._awaiting_video_text and not text.startswith("/") and text not in BUTTONS:
+            return self._video_text(text)
         if text in BUTTONS and (not self.conversational or BUTTONS[text] in _CONTROL or text == "Where to invest"):
             text = BUTTONS[text]  # a tapped button; with a brain the label itself is the request
         elif spoken:
@@ -186,23 +193,29 @@ class Commander:
             text = text if mapped == "/shutdown" else mapped  # powering off needs the literal command
         if not text.startswith("/"):
             return self._ask(text)
-        name, _, rest = text.partition(" ")
-        name, rest = name.lower().split("@")[0], rest.strip()
+        parts = text.split(None, 1)  # the command, then everything after the first space or line break
+        name, rest = parts[0].lower().split("@")[0], (parts[1].strip() if len(parts) > 1 else "")
         if name == "/confirm":
             if spoken:
                 return "For safety, /confirm must be typed, not spoken."
             return self._confirm(rest)
+        if name == "/publish" and spoken:
+            return "For safety, publishing must be tapped or typed, not spoken."
         handler = {
             "/start": lambda _: HELP, "/help": lambda _: HELP, "/brief": self._brief, "/screen": self._screen,
             "/jobs": self._jobs, "/apply": self._apply, "/status": self._status, "/plan": self._plan,
             "/channel": self._channel, "/doctor": self._doctor, "/sleep": self._sleep,
             "/wake": lambda _: f"I am awake, {self.title}.", "/shutdown": self._shutdown,
             "/forget": self._forget, "/memory": self._memory, "/invest": self._invest_start,
+            "/youtube": self._youtube, "/publish": self._publish, "/skip": self._skip, "/draft": self._draft,
+            "/text": self._video_text,
         }.get(name)
         if handler is None:
             return "Unknown command.\n" + HELP
         try:
             return handler(rest)
+        except publish.PublishError as exc:
+            return str(exc)
         except (_http.FetchError, ValueError, RuntimeError, OSError) as exc:
             return f"{name} failed: {exc}"
 
@@ -218,6 +231,83 @@ class Commander:
         if self.agent is None:
             return "I only know commands until a language model is configured (ANTHROPIC_API_KEY).\n" + HELP
         return self.agent(text)
+
+    # ---- YouTube: connect once, then publish each video you send with one tap
+
+    def _youtube(self, rest: str) -> str:
+        if rest.lower() == "disconnect":
+            publish.disconnect()
+            self.youtube_login = None
+            return "YouTube disconnected. The saved sign-in is deleted."
+        if publish.connected():
+            return ("YouTube is connected. Send me a video (with the title and description as its caption, or after "
+                    "it) and I will ask before publishing. /youtube disconnect removes the connection.")
+        with httpx.Client(timeout=30.0) as client:
+            self.youtube_login = publish.start_login(client)
+        return (f"To connect your channel, open {self.youtube_login.verification_url} on any device and enter this "
+                f"code:\n\n{self.youtube_login.user_code}\n\nSign in with the Google account that owns the channel. "
+                "I will tell you when it is connected.")
+
+    def youtube_poll(self) -> str | None:
+        """Check a pending sign-in. Returns a message to send when it finishes or fails, else None."""
+        if self.youtube_login is None:
+            return None
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                if publish.poll_login(client, self.youtube_login) == "waiting":
+                    return None
+        except publish.PublishError as exc:
+            self.youtube_login = None
+            return f"YouTube was not connected: {exc}"
+        self.youtube_login = None
+        return "YouTube is connected. Send me a video and I will ask before publishing it."
+
+    def video_received(self, data: bytes, caption: str = "") -> str:
+        draft = publish.save_video(data)
+        if caption.strip():
+            return self._video_text(caption)
+        self._awaiting_video_text = True
+        return (f"Got the video ({len(data) / 1_000_000:.1f} MB). Now send the text as one message: "
+                "the title on the first line, the description below it. A last line starting 'Tags:' sets the tags."
+                if draft else "")
+
+    def _video_text(self, text: str) -> str:
+        draft = publish.Draft.load()
+        if draft is None:
+            self._awaiting_video_text = False
+            return "There is no video waiting. Send me the video first."
+        draft.set_text(text)
+        draft.save()
+        self._awaiting_video_text = False
+        return self._draft("")
+
+    def _draft(self, _: str) -> str:
+        draft = publish.Draft.load()
+        if draft is None:
+            return "There is no video waiting. Send me one."
+        if any(f.level == "error" for f in draft.problems()):
+            return draft.summary() + "\n\nFix the errors by sending /text followed by the corrected title and description."
+        self.choices = list(PUBLISH_CHOICES)
+        return draft.summary() + "\n\nPublish it?"
+
+    def _publish(self, rest: str) -> str:
+        draft = publish.Draft.load()
+        if draft is None:
+            return "There is no video waiting. Send me one."
+        privacy = rest.lower() or "public"
+        with httpx.Client(timeout=120.0) as client:
+            result = publish.upload(draft, privacy, client)
+        publish.Draft.discard()
+        note = ""
+        if result["privacy"] != privacy:
+            note = (f"\nYou asked for {privacy}, but YouTube set it to {result['privacy']}. Google does this for "
+                    "projects it has not audited. Open the video in the YouTube app and change Visibility to Public.")
+        return f"Uploaded: {result['url']}\nVisibility: {result['privacy']}{note}"
+
+    def _skip(self, _: str) -> str:
+        publish.Draft.discard()
+        self._awaiting_video_text = False
+        return "Skipped. The video is deleted from the server."
 
     # ---- /invest: a short conversation with buttons, no language model needed
 
@@ -425,6 +515,7 @@ _KEYBOARD = {"keyboard": [[{"text": "Market briefing"}, {"text": "Where to inves
                           [{"text": "Stocks to watch"}, {"text": "My applications"}],
                           [{"text": "Go to sleep"}]],
              "resize_keyboard": True, "is_persistent": True}
+PUBLISH_CHOICES = {"Publish public": "/publish public", "Upload private": "/publish private", "Skip": "/skip"}
 _INVEST_WHEN = {"one time": False, "once": False, "lump sum": False, "every month": True, "monthly": True}
 POWEROFF_REQUEST = "poweroff.request"  # watched by a root-owned systemd unit on the server install
 
@@ -618,9 +709,24 @@ class Bot:
         if self._rate_limited():
             self.send("Slow down: too many messages this minute.")
             return
-        if isinstance(message.get("document"), dict):
+        document = message.get("document") if isinstance(message.get("document"), dict) else None
+        video = message.get("video") if isinstance(message.get("video"), dict) else None
+        if video is None and document and str(document.get("mime_type", "")).startswith("video/"):
+            video, document = document, None
+        if video:
             try:
-                self.send(self._save_resume(message["document"]))
+                if int(video.get("file_size") or 0) > publish.MAX_VIDEO_BYTES:
+                    raise ValueError("Telegram lets a bot download at most 20 MB; this video is larger")
+                data = self._download(video["file_id"], publish.MAX_VIDEO_BYTES)
+                self._commander.choices = []
+                reply = self._commander.video_received(data, str(message.get("caption") or ""))
+                self.send(reply, choices=self._commander.choices)
+            except (TelegramError, ValueError, RuntimeError, OSError) as exc:
+                self.send(f"Could not use that video: {exc}")
+            return
+        if document:
+            try:
+                self.send(self._save_resume(document))
             except (TelegramError, ValueError, RuntimeError, OSError) as exc:
                 self.send(f"Could not use that file: {exc}")
             return
@@ -677,7 +783,11 @@ class Bot:
                   buttons=True)
         while True:
             try:
-                self.poll_once()
+                # While a YouTube sign-in is pending, check on it every few seconds instead of every 50.
+                self.poll_once(timeout=4 if self._commander.youtube_login else 50)
+                outcome = self._commander.youtube_poll()
+                if outcome:
+                    self.send(outcome, buttons=True)
                 if self._commander.morning_due():
                     self._typing()
                     self.send(self._commander.morning_message())

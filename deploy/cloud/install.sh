@@ -68,6 +68,7 @@ fi
 grep -q '^SIDEKICK_TIMEZONE=' "$ENV_FILE" || printf '\n# Your time zone, for the greeting\nSIDEKICK_TIMEZONE=Asia/Kolkata\n' >> "$ENV_FILE"
 grep -q '^ANTHROPIC_API_KEY=' "$ENV_FILE" || printf '\n# Claude API key: turns commands into conversation (console.anthropic.com)\nANTHROPIC_API_KEY=\n' >> "$ENV_FILE"
 grep -q '^SIDEKICK_MORNING=' "$ENV_FILE" || printf '\n# Daily message at this time (HH:MM, your time zone). Empty = none\nSIDEKICK_MORNING=\n' >> "$ENV_FILE"
+grep -q '^YOUTUBE_CLIENT_ID=' "$ENV_FILE" || printf '\n# One-tap YouTube publishing: OAuth client from your Google Cloud project (deploy/YOUTUBE.md)\nYOUTUBE_CLIENT_ID=\nYOUTUBE_CLIENT_SECRET=\n' >> "$ENV_FILE"
 grep -q '^SIDEKICK_TITLE=' "$ENV_FILE" || printf '\n# How the bot addresses you\nSIDEKICK_TITLE=Master\n' >> "$ENV_FILE"
 chown root:root "$ENV_FILE"
 chmod 600 "$ENV_FILE"
