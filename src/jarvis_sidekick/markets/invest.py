@@ -80,6 +80,37 @@ class Suggestion:
         return round(self.amount - sum(line.spent for line in self.lines if line.units or not line.symbol), 2)
 
 
+DEFAULT_PROFILE = {"amount": 25_000.0, "risk": "moderate", "monthly": False}
+
+
+def _profile_path():
+    from jarvis_sidekick import paths
+
+    return paths.home() / "invest-profile.json"
+
+
+def save_profile(amount: float, risk: str, monthly: bool) -> None:
+    """Remember the last answers given to /invest, so the PDF edition can repeat the suggestion daily."""
+    import json
+
+    path = _profile_path()
+    path.write_text(json.dumps({"amount": amount, "risk": risk, "monthly": monthly}), encoding="utf-8")
+    path.chmod(0o600)
+
+
+def load_profile() -> tuple[dict, bool]:
+    """The saved answers and True, or the default (Rs 25,000, moderate, one time) and False."""
+    import json
+
+    try:
+        saved = json.loads(_profile_path().read_text(encoding="utf-8"))
+        if float(saved["amount"]) >= 500 and saved["risk"] in SPLITS and isinstance(saved["monthly"], bool):
+            return {"amount": float(saved["amount"]), "risk": saved["risk"], "monthly": saved["monthly"]}, True
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return dict(DEFAULT_PROFILE), False
+
+
 def _price(symbol: str) -> float | None:
     try:
         return data.history(symbol).last

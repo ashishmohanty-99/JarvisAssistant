@@ -360,6 +360,7 @@ class Commander:
                     "Conservative: about 10%. Moderate: about 20%. Aggressive: 30% or more.")
         self._invest = None
         suggestion = invest.suggest(state["amount"], state["risk"], monthly=state["monthly"])
+        invest.save_profile(state["amount"], state["risk"], state["monthly"])  # the PDF edition reuses these
         self.say = invest.to_speech(suggestion, self.title)
         return invest.to_text(suggestion, self.title)
 
@@ -397,7 +398,13 @@ class Commander:
         if not collected["indices"] and not any(collected["news"].values()):
             return "No market data or news could be fetched right now, so there is no edition to print."
         now = self.now()
-        page = paper.build_html(collected, now=now, title=self.title, extras=self._own_numbers())
+        profile, chosen = invest.load_profile()
+        try:
+            suggestion = invest.suggest(profile["amount"], profile["risk"], monthly=profile["monthly"])
+        except (_http.FetchError, ValueError):
+            suggestion = None
+        page = paper.build_html(collected, now=now, title=self.title, extras=self._own_numbers(),
+                                suggestion=suggestion, suggestion_is_default=not chosen)
         self._attachment = paper.render_pdf(page, paths.home() / "briefings" / f"jarvis-brief-{now:%Y-%m-%d}.pdf")
         self.say = brief.to_speech(collected)
         return "Here is today's edition."

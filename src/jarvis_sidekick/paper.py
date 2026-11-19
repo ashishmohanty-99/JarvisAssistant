@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from jarvis_sidekick import paths
+from jarvis_sidekick.markets import invest
 
 # Ink and surfaces. Colour is used for two things only: the accent on the newest point of a trend line,
 # and the direction mark beside a change. Text is always ink.
@@ -71,6 +72,13 @@ th:first-child, td:first-child {{ text-align: left; }}
 td.note {{ color: {SECOND}; font-size: 8pt; text-align: left; padding-left: 8pt; }}
 tr:last-child td {{ border-bottom: 0; }}
 .name {{ font-weight: 600; }}
+
+table.plan {{ table-layout: fixed; }}
+table.plan col.share {{ width: 8%; }} table.plan col.what {{ width: 31%; }} table.plan col.units {{ width: 8%; }}
+table.plan col.price {{ width: 11%; }} table.plan col.cost {{ width: 11%; }} table.plan col.why {{ width: 31%; }}
+table.plan td, table.plan th {{ padding-left: 6pt; vertical-align: top; }}
+table.plan td:first-child, table.plan th:first-child {{ padding-left: 0; }}
+.fine {{ margin: 6pt 0 0; color: {SECOND}; font-size: 7.8pt; line-height: 1.4; }}
 
 footer {{ margin-top: 4pt; padding-top: 6pt; border-top: .6pt solid {INK}; color: {MUTED}; font-size: 7.2pt;
           line-height: 1.4; }}
@@ -180,7 +188,46 @@ def _screen(rows: list[dict]) -> str:
             f'<th style="text-align:left;padding-left:8pt">Reading</th></tr>{body}</table>')
 
 
-def build_html(brief: dict, *, now: datetime, title: str = "", extras: list[tuple[str, str]] | None = None) -> str:
+def _suggestion(s, is_default: bool) -> str:
+    """The /invest suggestion as a table: funds first, then the stock ideas, with units at the latest price."""
+    fund_symbols = {symbol for symbol, _, _ in invest.FUNDS.values()}
+
+    def row(line) -> str:
+        share = f"{round(100 * line.amount / s.amount)}%"
+        code = f' <span style="color:{MUTED};font-weight:400">{_e(line.symbol.removesuffix(".NS"))}</span>' \
+            if line.symbol in fund_symbols else ""
+        if not line.symbol:
+            units, price, cost = "", "", f"{line.amount:,.0f}"
+        elif line.price is None:
+            units, price, cost = "", "no price", f"{line.amount:,.0f}"
+        elif line.units == 0:
+            units, price, cost = "0", _number(line.price), "–"
+        else:
+            units, price, cost = str(line.units), _number(line.price), f"{line.spent:,.0f}"
+        why = line.why + ("; one share costs more than this slice" if line.symbol and line.price and not line.units else "")
+        return (f'<tr><td>{share}</td><td class="name" style="text-align:left">{_e(line.label)}{code}'
+                f'</td><td>{units}</td><td>{price}</td><td>{cost}</td><td class="note">{_e(why)}</td></tr>')
+
+    funds = [line for line in s.lines if line.symbol in fund_symbols or not line.symbol]
+    ideas = [line for line in s.lines if line.symbol and line.symbol not in fund_symbols]
+    head = ('<colgroup><col class="share"><col class="what"><col class="units"><col class="price"><col class="cost">'
+            '<col class="why"></colgroup><tr><th style="text-align:left">Share</th><th style="text-align:left">{0}</th>'
+            '<th>Units</th><th>Price</th><th>Rupees</th><th style="text-align:left;padding-left:8pt">Why</th></tr>')
+    tables = f'<table class="plan">{head.format("Funds")}{"".join(row(line) for line in funds)}</table>'
+    if ideas:
+        tables += (f'<table class="plan" style="margin-top:7pt">{head.format("Stock ideas from the screen")}'
+                   f'{"".join(row(line) for line in ideas)}</table>')
+    when = "each month" if s.monthly else "one time"
+    source = ("This uses a default amount. Send /invest to the bot once to set your own amount and risk."
+              if is_default else "Amount and risk are the ones you last gave /invest.")
+    left = f" Left over after whole units: Rs {s.left_over:,.0f}." if s.left_over >= 1 else ""
+    caveats = " ".join(invest.CAVEATS)
+    return (f'<section><h2>Where Rs {s.amount:,.0f} could go · {_e(s.risk)} risk · {when}</h2>{tables}'
+            f'<p class="fine">{source}{left} {_e(caveats)}</p></section>')
+
+
+def build_html(brief: dict, *, now: datetime, title: str = "", extras: list[tuple[str, str]] | None = None,
+               suggestion=None, suggestion_is_default: bool = False) -> str:
     """The whole page as one self-contained HTML string."""
     groups: dict[str, list[dict]] = {}
     for row in brief["indices"]:
@@ -193,11 +240,14 @@ def build_html(brief: dict, *, now: datetime, title: str = "", extras: list[tupl
             grid = "tiles three" if len(groups[group]) % 4 and len(groups[group]) % 3 == 0 else "tiles"
             sections.append(f'<section><h2>{heading}</h2><div class="{grid}">{tiles}</div></section>')
 
+    if suggestion is not None and suggestion.lines:
+        sections.append(_suggestion(suggestion, suggestion_is_default))
+
     columns = []
     for region, heading in (("india", "India"), ("world", "World")):
         items = brief["news"].get(region) or []
         if items:
-            stories = "".join(_article(item, now, lead=i == 0) for i, item in enumerate(items[:6]))
+            stories = "".join(_article(item, now, lead=i == 0) for i, item in enumerate(items[:5]))
             columns.append(f"<div><h2>{heading}</h2>{stories}</div>")
     if columns:
         sections.append(f'<section style="break-inside:auto"><div class="news">{"".join(columns)}</div></section>')

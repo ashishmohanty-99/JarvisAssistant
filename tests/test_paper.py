@@ -111,6 +111,24 @@ def test_feed_summaries_are_plain_short_and_never_repeat_the_title():
 
 
 @pytest.fixture
+def funds(monkeypatch):
+    from jarvis_sidekick import _http
+    from jarvis_sidekick.markets import data
+    from jarvis_sidekick.markets.data import Series
+
+    prices = {"NIFTYBEES.NS": 280.0, "JUNIORBEES.NS": 740.0, "MON100.NS": 190.0, "GOLDBEES.NS": 95.0}
+
+    def history(symbol, range_="1y", client=None):
+        if symbol in prices:
+            return Series(symbol, [prices[symbol]] * 30, [""] * 30)
+        if symbol not in ("RELIANCE.NS", "TCS.NS"):
+            raise _http.FetchError("none")
+        return Series(symbol, [900 * 1.002**i * (1.02 if i % 2 else 1) for i in range(260)], [""] * 260)
+
+    monkeypatch.setattr(data, "history", history)
+
+
+@pytest.fixture
 def chromium(monkeypatch):
     pytest.importorskip("playwright")
     if Path("/opt/pw-browsers/chromium").exists():
@@ -131,7 +149,7 @@ def test_a_real_pdf_comes_out_with_text_and_working_links(edition, chromium, tmp
 
 
 @respx.mock
-def test_bot_sends_the_text_then_the_pdf_and_the_spoken_form_asks_for_it(edition, chromium, monkeypatch):
+def test_bot_sends_the_text_then_the_pdf_and_the_spoken_form_asks_for_it(edition, chromium, funds, monkeypatch):
     monkeypatch.setattr(botmod.brief, "collect", lambda markets=("india", "us"): edition)
     token = "123456789:" + "A" * 35
     base = f"https://api.telegram.org/bot{token}"
@@ -168,3 +186,54 @@ def test_morning_message_attaches_the_edition_and_survives_a_failed_one(edition,
 
     monkeypatch.setattr(botmod.paper, "render_pdf", broken)
     assert "could not be produced" in commander.morning_message() and commander.take_attachment() is None
+
+
+# ---- the investment suggestion inside the edition
+
+
+def test_edition_carries_the_suggestion_with_units_reasons_and_caveats(edition, funds):
+    from jarvis_sidekick.markets import invest
+
+    page = paper.build_html(edition, now=NOW, suggestion=invest.suggest(25_000, "moderate"), suggestion_is_default=True)
+    assert "<h2>Where Rs 25,000 could go · moderate risk · one time</h2>" in page
+    assert "NIFTY 50 index ETF" in page and ">31</td><td>280.00</td><td>8,680</td>" in page
+    assert "Stock ideas from the screen" in page and ">RELIANCE<" in page and "steady uptrend" in page
+    assert "This uses a default amount. Send /invest to the bot once" in page
+    assert "Nothing here promises a return." in page and "Left over after whole units" in page
+    assert page.index("Where Rs 25,000 could go") < page.index("<h2>India</h2>")  # before the news, not buried after it
+
+    chosen = paper.build_html(edition, now=NOW, suggestion=invest.suggest(40_000, "aggressive", monthly=True))
+    assert "Where Rs 40,000 could go · aggressive risk · each month" in chosen
+    assert "Amount and risk are the ones you last gave /invest." in chosen
+    assert "Where Rs" not in paper.build_html(edition, now=NOW)  # no suggestion, no section
+
+
+def test_invest_answers_are_remembered_for_the_edition(funds):
+    from jarvis_sidekick.markets import invest
+
+    assert invest.load_profile() == ({"amount": 25_000.0, "risk": "moderate", "monthly": False}, False)
+    Commander().handle("/invest 30000 monthly aggressive")
+    assert invest.load_profile() == ({"amount": 30_000.0, "risk": "aggressive", "monthly": True}, True)
+    (invest._profile_path()).write_text('{"amount": "lots", "risk": "yolo"}')
+    assert invest.load_profile()[1] is False  # a damaged file falls back to the default
+
+
+def test_bot_edition_uses_the_saved_answers_and_survives_missing_prices(edition, funds, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(botmod.brief, "collect", lambda markets=("india", "us"): edition)
+    monkeypatch.setattr(botmod.paper, "render_pdf", lambda page, target=None: seen.setdefault("page", page) and target)
+    commander = Commander()
+    commander.now = lambda: NOW
+    commander.handle("/invest 30000 once conservative")
+    commander.handle("/paper")
+    assert "Where Rs 30,000 could go · conservative risk · one time" in seen["page"]
+
+    from jarvis_sidekick import _http
+    from jarvis_sidekick.markets import invest
+
+    def down(*args, **kwargs):
+        raise _http.FetchError("no prices")
+
+    monkeypatch.setattr(invest, "suggest", down)
+    seen.clear()
+    assert commander.handle("/paper") == "Here is today's edition." and "Where Rs" not in seen["page"]

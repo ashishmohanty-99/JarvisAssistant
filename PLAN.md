@@ -32,7 +32,7 @@ Goal: one assistant you talk to that reads the web, hunts jobs against your resu
 - [x] The briefing as a designed PDF edition (`/paper`), optionally every morning
 - [x] One-tap YouTube publishing of a video sent to the bot (stage 1)
 - [x] Conversation through Claude with read-only tools, memory, tap buttons, typing indicator, optional morning message
-- [x] Nine OpenJarvis tools; 175 tests; lint clean; `SECURITY.md` threat table
+- [x] Nine OpenJarvis tools; 178 tests; lint clean; `SECURITY.md` threat table
 
 ### Phase 2: first live run (needs your keys and machine)
 - [ ] Run each command against the live services and fix any parser drift (ElevenLabs, job APIs, Yahoo, feeds, YouTube)
