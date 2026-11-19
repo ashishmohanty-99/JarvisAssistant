@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jarvis-sidekick"
+version = "0.1.0"
+description = "OpenJarvis extension: ElevenLabs voice in and out, web research, resume-matched job hunting, market briefings and side-hustle planning."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "Aashis Mohanty" }]
+dependencies = [
+    "click>=8",
+    "httpx>=0.27",
+    "lxml>=6.1.0",
+]
+
+[project.optional-dependencies]
+# OpenJarvis is not on PyPI under a stable name yet; install it from source.
+jarvis = ["openjarvis @ git+https://github.com/open-jarvis/OpenJarvis"]
+voice = ["sounddevice>=0.5", "soundfile>=0.12", "numpy>=1.24"]
+resume = ["pypdf>=5", "python-docx>=1.1"]
+apply = ["playwright>=1.40"]
+youtube = ["youtube-transcript-api>=1.0"]
+dev = ["pytest>=8", "respx>=0.22", "ruff>=0.4"]
+
+[project.urls]
+Repository = "https://github.com/ashishmohanty-99/JarvisAssistant"
+
+[project.scripts]
+sidekick = "jarvis_sidekick.cli:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jarvis_sidekick"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+src = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tool classes declare their JSON schema as read-only class attributes.
+"src/jarvis_sidekick/oj_tools.py" = ["RUF012"]
