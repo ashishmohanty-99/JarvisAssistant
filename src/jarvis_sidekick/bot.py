@@ -24,17 +24,22 @@ import logging
 import os
 import re
 import secrets
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
-from jarvis_sidekick import _http, common, paths
+from jarvis_sidekick import _http, common, paper, paths, publish
 from jarvis_sidekick.jobs import apply, match, sources
 from jarvis_sidekick.jobs.tracker import Tracker
-from jarvis_sidekick.markets import brief, data, indicators, plan
+from jarvis_sidekick.markets import brief, data, indicators, invest, plan
 from jarvis_sidekick.profile import youtube
 
 logger = logging.getLogger(__name__)
@@ -42,6 +47,7 @@ logger = logging.getLogger(__name__)
 API = "https://api.telegram.org"
 MAX_VOICE_SECONDS = 120
 MAX_VOICE_BYTES = 5_000_000
+MAX_RESUME_BYTES = 5_000_000
 MAX_TEXT_CHARS = 2000
 RATE_LIMIT = 20  # messages per minute
 CODE_TTL_SECONDS = 300
@@ -50,14 +56,23 @@ CODE_ATTEMPTS = 3
 AGENT_TOOLS = ("web_search", "web_scrape", "job_search", "market_brief", "stock_screen", "investment_plan",
                "github_profile", "youtube_channel", "side_hustle_ideas", "calculator", "think")
 HELP = """Commands (type them, or say them in a voice note):
-/brief - market briefing
+/paper - today's news and markets as a designed PDF
+/brief - market briefing as text
 /screen india|us|etf - momentum screen
 /jobs <role> [in <place, place>] - search and rank against your resume
 /apply <id> - fill the form (sends nothing), then gives you a code
 /confirm <code> - send that application (typed only)
 /status - your applications
 /channel - your YouTube channel's recent videos and views
+/doctor - check every connection (prices, news, jobs, voice, browser)
+Send a PDF or .docx to set the resume you apply with.
+/youtube - connect your channel; then send a video and tap Publish
+/invest [amount] - where to put a sum of money: funds, stock ideas and quantities
 /plan <monthly> <years> [conservative|moderate|aggressive]
+/memory - what I remember about you; /forget - wipe it and our conversation
+/sleep - stop answering until you say "Jarvis" (or /wake)
+/shutdown - power the server off (typed only; start it again from your provider's panel)
+Start with "Jarvis" and it greets you: "Jarvis", or "Jarvis, give me the market briefing".
 Anything else is answered by Jarvis."""
 
 
@@ -74,53 +89,408 @@ class Pending:
 
 
 @dataclass
+class Exchange:
+    """One answer and what travels with it."""
+
+    reply: str
+    say: str
+    choices: list[str]
+    had_choices: bool
+    attachment: Path | None
+    action: Callable[[], None] | None
+
+
+@dataclass
 class Commander:
     """Turns one message into one reply. Holds no network state, so it is easy to test."""
 
     resume_path: str = ""
     locations: str = ""
     channel_id: str = ""
+    title: str = "Master"  # how the bot addresses you when you call it by name
+    timezone: str = ""  # IANA name such as Asia/Kolkata; empty means the machine's own zone
+    allow_poweroff: bool = False
+    morning: str = ""  # HH:MM for a daily message, empty for none
+    brain: Any = None  # the conversational brain, when one is configured
+    say: str = field(default="", init=False)
+    _after_reply: Callable[[], None] | None = field(default=None, init=False)
     agent: Callable[[str], str] | None = None
     clock: Callable[[], float] = time.monotonic
     pending: Pending | None = field(default=None, init=False)
+    choices: list[str] = field(default_factory=list, init=False)  # answer buttons for the reply just given
+    _invest: dict | None = field(default=None, init=False)
+    _awaiting_video_text: bool = field(default=False, init=False)
+    _attachment: Path | None = field(default=None, init=False)
+    _misses: int = field(default=0, init=False)
+    _lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
+    youtube_login: publish.DeviceLogin | None = field(default=None, init=False)
+
+    def exchange(self, text: str, *, spoken: bool = False) -> Exchange:
+        """Answer one message and collect everything that goes with the answer, as one uninterrupted step.
+
+        Telegram and the web page share one Commander; the lock keeps one channel's answer buttons,
+        spoken text and attachment from being picked up by the other.
+        """
+        with self._lock:
+            had_choices = bool(self.choices)
+            reply = self.handle(text, spoken=spoken)
+            return Exchange(reply=reply, say=self.say or reply, choices=list(self.choices), had_choices=had_choices,
+                            attachment=self.take_attachment(), action=self.take_action())
 
     def handle(self, text: str, *, spoken: bool = False) -> str:
+        """Answer one message. Afterwards ``self.say`` holds a short version fit for speaking aloud."""
         text = text.strip()[:MAX_TEXT_CHARS]
-        if spoken:
-            text = _spoken_to_command(text)
+        called = _WAKE.match(text)
+        if called:
+            text = text[called.end():].strip()
+        if self.asleep:
+            # Asleep, it answers to its name (or /wake) and nothing else.
+            if not (called or text.lower().split("@")[0] == "/wake"):
+                self.say = f"I am asleep, {self.title}. Say Jarvis to wake me."
+                return self.say
+            _asleep_flag().unlink(missing_ok=True)
+            if not text or text.lower().startswith("/wake") or _spoken_to_command(text) == "/wake":
+                self.say = f"{self.greeting()}, {self.title}. I am awake. What do you need?"
+                return self.say
+        if called and not text:
+            self.say = f"{self.greeting()}, {self.title}. What do you need?"
+            return self.say
+        self.say, self.choices = "", []
+        reply = self._dispatch(text, spoken)
+        if called:
+            reply = f"Yes, {self.title}.\n{reply}"
+        spoken_text = self.say or _speakable(reply)
+        self.say = f"Yes, {self.title}. {spoken_text}" if called and self.say else spoken_text
+        return reply
+
+    @property
+    def asleep(self) -> bool:
+        return _asleep_flag().exists()
+
+    def greeting(self) -> str:
+        """Good morning / afternoon / evening by the clock where you are (SIDEKICK_TIMEZONE)."""
+        hour = self.now().hour
+        if 5 <= hour < 12:
+            return "Good morning"
+        if 12 <= hour < 17:
+            return "Good afternoon"
+        if 17 <= hour < 22:
+            return "Good evening"
+        return "You are up late"
+
+    def now(self) -> datetime:
+        try:
+            return datetime.now(ZoneInfo(self.timezone)) if self.timezone else datetime.now().astimezone()
+        except (ZoneInfoNotFoundError, ValueError):
+            return datetime.now().astimezone()
+
+    def take_attachment(self) -> Path | None:
+        """A file to send after the reply (the PDF edition)."""
+        attachment, self._attachment = self._attachment, None
+        return attachment
+
+    def take_action(self) -> Callable[[], None] | None:
+        """Something to do after the reply has been delivered (powering off must not cut the reply short)."""
+        action, self._after_reply = self._after_reply, None
+        return action
+
+    def _sleep(self, _: str) -> str:
+        _asleep_flag().touch()
+        return f"Going to sleep, {self.title}. Say Jarvis to wake me."
+
+    def _shutdown(self, _: str) -> str:
+        if not self.allow_poweroff:
+            return "Powering off is only available on the server install."
+        self._after_reply = lambda: (paths.home() / POWEROFF_REQUEST).touch()
+        return (f"Powering off the server, {self.title}. I cannot hear you while it is off: start it again from your "
+                "provider's control panel and I will message you when I am back.")
+
+    def _dispatch(self, text: str, spoken: bool) -> str:
+        if self._invest is not None and not text.startswith("/"):
+            answered = self._invest_answer(text)
+            if answered is not None:
+                return answered
+        self._invest = None  # anything else ends an unfinished /invest conversation
+        if not spoken and text in PUBLISH_CHOICES:
+            text = PUBLISH_CHOICES[text]  # a tapped button; a voice note can never publish
+        elif not spoken and self._awaiting_video_text and not text.startswith("/") and text not in BUTTONS:
+            return self._video_text(text)
+        if text in BUTTONS and (not self.conversational or BUTTONS[text] in _CONTROL or text == "Where to invest"):
+            text = BUTTONS[text]  # a tapped button; with a brain the label itself is the request
+        elif spoken:
+            text = _spoken_to_command(text, control_only=self.conversational)
+            if text == "/shutdown":
+                return "To power off the server, type /shutdown. To pause me, say: go to sleep."
+        elif self.conversational and _spoken_to_command(text, control_only=True) == "/sleep":
+            text = "/sleep"  # "go to sleep" typed as a sentence
+        elif not self.conversational and not text.startswith("/"):
+            mapped = _spoken_to_command(text)  # a typed sentence works like a spoken one
+            text = text if mapped == "/shutdown" else mapped  # powering off needs the literal command
         if not text.startswith("/"):
             return self._ask(text)
-        name, _, rest = text.partition(" ")
-        name, rest = name.lower().split("@")[0], rest.strip()
+        parts = text.split(None, 1)  # the command, then everything after the first space or line break
+        name, rest = parts[0].lower().split("@")[0], (parts[1].strip() if len(parts) > 1 else "")
         if name == "/confirm":
             if spoken:
                 return "For safety, /confirm must be typed, not spoken."
             return self._confirm(rest)
+        if name == "/publish" and spoken:
+            return "For safety, publishing must be tapped or typed, not spoken."
         handler = {
             "/start": lambda _: HELP, "/help": lambda _: HELP, "/brief": self._brief, "/screen": self._screen,
             "/jobs": self._jobs, "/apply": self._apply, "/status": self._status, "/plan": self._plan,
-            "/channel": self._channel,
+            "/channel": self._channel, "/doctor": self._doctor, "/sleep": self._sleep,
+            "/wake": lambda _: f"I am awake, {self.title}.", "/shutdown": self._shutdown,
+            "/forget": self._forget, "/memory": self._memory, "/invest": self._invest_start,
+            "/paper": self._paper, "/youtube": self._youtube, "/publish": self._publish, "/skip": self._skip, "/draft": self._draft,
+            "/text": self._video_text,
         }.get(name)
         if handler is None:
             return "Unknown command.\n" + HELP
         try:
             return handler(rest)
+        except publish.PublishError as exc:
+            return str(exc)
         except (_http.FetchError, ValueError, RuntimeError, OSError) as exc:
             return f"{name} failed: {exc}"
 
     # ---- commands
 
+    @property
+    def conversational(self) -> bool:
+        return self.agent is not None
+
     def _ask(self, text: str) -> str:
         if not text:
             return HELP
-        if self.agent is None:
-            return "Free-form questions need OpenJarvis with a model configured.\n" + HELP
-        return self.agent(text)
+        if self.agent is not None:
+            return self.agent(text)
+        small = self._small_talk(text)
+        if small:
+            return small
+        # Not a command it knows. Say so briefly, differently each time, and offer what it can do:
+        # hearing the same long list after every miss is what makes a fixed-command assistant feel broken.
+        self._misses += 1
+        opener = (f"I did not find a command in that, {self.title}.", "That is not something I know how to do yet.",
+                  f"I am not sure what you need, {self.title}.")[self._misses % 3]
+        self.choices = ["Market briefing", "Where to invest", "News PDF"]
+        return f"{opener} {_CAN_DO}"
+
+    def _small_talk(self, text: str) -> str | None:
+        """Short human replies to greetings, thanks and a few simple questions. No model: fixed phrases."""
+        said = text.lower().strip(" .!?")
+        now = self.now()
+        if re.fullmatch(r"(?:hi|hello|hey|hey there|good (?:morning|afternoon|evening|day))(?: jarvis)?", said):
+            return f"{self.greeting()}, {self.title}. What do you need?"
+        if re.search(r"\b(?:thanks|thank you|well done|good job|great|perfect|nice)\b", said) and len(said) < 40:
+            return f"Always, {self.title}."
+        if re.search(r"\bhow are you\b|\bhow(?:'s| is) it going\b", said):
+            return f"All systems running, {self.title}. What do you need?"
+        if re.search(r"\bwhat(?:'s| is)? (?:the )?time\b|\btime is it\b", said):
+            return f"It is {now:%H:%M}, {self.title}."
+        if re.search(r"\bwhat(?:'s| is)? (?:the |today's )?(?:date|day)\b|\bwhat day\b", said):
+            return f"It is {now:%A}, {now.day} {now:%B %Y}."
+        if re.search(r"\bwho are you\b|\byour name\b", said):
+            return f"I am Jarvis, {self.title}. {_CAN_DO}"
+        if re.search(r"\bwhat can you do\b|\bwhat do you do\b|\byour (?:commands|options|skills)\b|\bhelp me\b", said):
+            return _CAN_DO
+        if re.fullmatch(r"(?:ok|okay|yes|no|nothing|never ?mind|cancel|stop|that's it|that is it)", said):
+            return f"Very well, {self.title}."
+        return None
+
+    # ---- YouTube: connect once, then publish each video you send with one tap
+
+    def _youtube(self, rest: str) -> str:
+        if rest.lower() == "disconnect":
+            publish.disconnect()
+            self.youtube_login = None
+            return "YouTube disconnected. The saved sign-in is deleted."
+        if publish.connected():
+            return ("YouTube is connected. Send me a video (with the title and description as its caption, or after "
+                    "it) and I will ask before publishing. /youtube disconnect removes the connection.")
+        with httpx.Client(timeout=30.0) as client:
+            self.youtube_login = publish.start_login(client)
+        return (f"To connect your channel, open {self.youtube_login.verification_url} on any device and enter this "
+                f"code:\n\n{self.youtube_login.user_code}\n\nSign in with the Google account that owns the channel. "
+                "I will tell you when it is connected.")
+
+    def youtube_poll(self) -> str | None:
+        """Check a pending sign-in. Returns a message to send when it finishes or fails, else None."""
+        if self.youtube_login is None:
+            return None
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                if publish.poll_login(client, self.youtube_login) == "waiting":
+                    return None
+        except publish.PublishError as exc:
+            self.youtube_login = None
+            return f"YouTube was not connected: {exc}"
+        self.youtube_login = None
+        return "YouTube is connected. Send me a video and I will ask before publishing it."
+
+    def video_received(self, data: bytes, caption: str = "") -> str:
+        draft = publish.save_video(data)
+        if caption.strip():
+            return self._video_text(caption)
+        self._awaiting_video_text = True
+        return (f"Got the video ({len(data) / 1_000_000:.1f} MB). Now send the text as one message: "
+                "the title on the first line, the description below it. A last line starting 'Tags:' sets the tags."
+                if draft else "")
+
+    def _video_text(self, text: str) -> str:
+        draft = publish.Draft.load()
+        if draft is None:
+            self._awaiting_video_text = False
+            return "There is no video waiting. Send me the video first."
+        draft.set_text(text)
+        draft.save()
+        self._awaiting_video_text = False
+        return self._draft("")
+
+    def _draft(self, _: str) -> str:
+        draft = publish.Draft.load()
+        if draft is None:
+            return "There is no video waiting. Send me one."
+        if any(f.level == "error" for f in draft.problems()):
+            return draft.summary() + "\n\nFix the errors by sending /text followed by the corrected title and description."
+        self.choices = list(PUBLISH_CHOICES)
+        return draft.summary() + "\n\nPublish it?"
+
+    def _publish(self, rest: str) -> str:
+        draft = publish.Draft.load()
+        if draft is None:
+            return "There is no video waiting. Send me one."
+        privacy = rest.lower() or "public"
+        with httpx.Client(timeout=120.0) as client:
+            result = publish.upload(draft, privacy, client)
+        publish.Draft.discard()
+        note = ""
+        if result["privacy"] != privacy:
+            note = (f"\nYou asked for {privacy}, but YouTube set it to {result['privacy']}. Google does this for "
+                    "projects it has not audited. Open the video in the YouTube app and change Visibility to Public.")
+        return f"Uploaded: {result['url']}\nVisibility: {result['privacy']}{note}"
+
+    def _skip(self, _: str) -> str:
+        publish.Draft.discard()
+        self._awaiting_video_text = False
+        return "Skipped. The video is deleted from the server."
+
+    # ---- /invest: a short conversation with buttons, no language model needed
+
+    def _invest_start(self, rest: str) -> str:
+        words = rest.lower()
+        self._invest = {
+            "amount": invest.parse_amount(rest),
+            "monthly": True if re.search(r"\b(monthly|every month|each month|per month|sip)\b", words)
+            else False if re.search(r"\b(once|one time|one-time|lump ?sum)\b", words) else None,
+            "risk": next((r for r in invest.SPLITS if r in words), None),
+        }
+        return self._invest_next()
+
+    def _invest_answer(self, text: str) -> str | None:
+        """Use *text* as the answer to the pending question, or return None if it is not one."""
+        state, answer = self._invest, text.strip().lower().rstrip(".!")
+        if state["amount"] is None:
+            state["amount"] = invest.parse_amount(text)
+            if state["amount"] is None:
+                return None
+        elif state["monthly"] is None:
+            if answer not in _INVEST_WHEN:
+                return None
+            state["monthly"] = _INVEST_WHEN[answer]
+        elif state["risk"] is None:
+            risk = next((r for r in invest.SPLITS if answer.startswith(r)), None)
+            if risk is None:
+                return None
+            state["risk"] = risk
+        return self._invest_next()
+
+    def _invest_next(self) -> str:
+        state = self._invest
+        if state["amount"] is None:
+            return "How much do you want to invest? For example: 25000"
+        if state["monthly"] is None:
+            self.choices = ["One time", "Every month"]
+            return f"Rs {state['amount']:,.0f}. Is that one time, or every month?"
+        if state["risk"] is None:
+            self.choices = ["Conservative", "Moderate", "Aggressive"]
+            return ("How much of a fall could you sit through without selling?\n"
+                    "Conservative: about 10%. Moderate: about 20%. Aggressive: 30% or more.")
+        self._invest = None
+        suggestion = invest.suggest(state["amount"], state["risk"], monthly=state["monthly"])
+        invest.save_profile(state["amount"], state["risk"], state["monthly"])  # the PDF edition reuses these
+        self.say = invest.to_speech(suggestion, self.title)
+        return invest.to_text(suggestion, self.title)
+
+    def _forget(self, _: str) -> str:
+        return self.brain.forget() if self.brain else "There is nothing to forget: no language model is configured."
+
+    def _memory(self, _: str) -> str:
+        notes = self.brain.notes() if self.brain else []
+        return "\n".join(["What I remember about you:", *(f"- {n}" for n in notes)]) if notes else "I have no notes yet."
+
+    def morning_due(self) -> bool:
+        """True once a day, at or after the configured HH:MM in your time zone, when awake."""
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", self.morning) or self.asleep:
+            return False
+        now, marker = self.now(), paths.home() / "morning.sent"
+        today = now.date().isoformat()
+        if f"{now:%H:%M}" < self.morning or (marker.exists() and marker.read_text().strip() == today):
+            return False
+        marker.write_text(today)
+        return True
+
+    def morning_message(self) -> str:
+        """The morning greeting. The PDF edition is attached whenever it can be produced."""
+        try:
+            edition = self._paper("")
+        except (_http.FetchError, RuntimeError, OSError, ValueError) as exc:
+            edition = f"The PDF edition could not be produced: {exc}"
+        if self.agent is not None:
+            return self.agent("It is morning. Greet me and give me today's briefing: the market, anything notable "
+                              "in the news, and one thing worth my attention today.")
+        return f"{self.greeting()}, {self.title}. {edition}"
+
+    def _paper(self, _: str) -> str:
+        collected = brief.collect(("india",))
+        if not collected["indices"] and not any(collected["news"].values()):
+            return "No market data or news could be fetched right now, so there is no edition to print."
+        now = self.now()
+        profile, chosen = invest.load_profile()
+        try:
+            suggestion = invest.suggest(profile["amount"], profile["risk"], monthly=profile["monthly"])
+        except (_http.FetchError, ValueError):
+            suggestion = None
+        page = paper.build_html(collected, now=now, title=self.title, extras=self._own_numbers(),
+                                suggestion=suggestion, suggestion_is_default=not chosen)
+        self._attachment = paper.render_pdf(page, paths.home() / "briefings" / f"jarvis-brief-{now:%Y-%m-%d}.pdf")
+        self.say = brief.to_speech(collected)
+        return "Here is today's edition."
+
+    def _own_numbers(self) -> list[tuple[str, str]]:
+        """Small personal figures for the last strip of the page. Anything unavailable is left out."""
+        numbers: list[tuple[str, str]] = []
+        tracker = Tracker()
+        try:
+            rows = tracker.all()
+        finally:
+            tracker.close()
+        if rows:
+            numbers.append(("Applications in progress", str(sum(r["status"] != "submitted" for r in rows))))
+            numbers.append(("Applications sent", str(sum(r["status"] == "submitted" for r in rows))))
+        if self.channel_id:
+            try:
+                videos = youtube.channel(self.channel_id)["videos"]
+                numbers.append(("Channel views, recent videos", f"{sum(v['views'] for v in videos):,}"))
+            except (_http.FetchError, ValueError):
+                pass
+        return numbers
 
     def _brief(self, _: str) -> str:
         collected = brief.collect()
         if not collected["indices"] and not any(collected["news"].values()):
             return "No market data or news could be fetched right now."
+        self.say = brief.to_speech(collected)  # the headline numbers, not the whole table read aloud
         return brief.to_markdown(collected)
 
     def _screen(self, rest: str) -> str:
@@ -142,7 +512,8 @@ class Commander:
 
     def _jobs(self, rest: str) -> str:
         if not rest:
-            return "Usage: /jobs <role> [in <place, place>]"
+            self.choices = ["Find engineering manager jobs", "Find director of engineering jobs"]
+            return f"Which role, {self.title}? Say, for example: find engineering manager jobs."
         query, _, where = rest.partition(" in ")
         where = where.strip() or self.locations
         profile = common.resume_profile(self.resume_path)
@@ -209,6 +580,13 @@ class Commander:
         return "\n".join(f"{r['updated_at'][:10]} {r['status']}: {r['title']} @ {r['company']} ({r['job_id']})"
                          for r in rows[:20])
 
+    def _doctor(self, _: str) -> str:
+        from jarvis_sidekick import doctor
+
+        checks = [c for c in doctor.run() if c.name not in ("Telegram bot", "microphone", "env file")]
+        failed = sum(1 for c in checks if c.status == doctor.FAIL)
+        return "\n".join([*(f"{c.status}  {c.name}: {c.detail}" for c in checks), "", f"{failed} failed"])
+
     def _channel(self, _: str) -> str:
         if not self.channel_id:
             return "Set SIDEKICK_YOUTUBE_CHANNEL to your channel id (UC...) first."
@@ -225,20 +603,74 @@ class Commander:
         return "\n".join([*lines, "", *built.caveats])
 
 
+# "Jarvis", "Hey Jarvis," ... at the start of a message. Speech-to-text also writes "Javis" and "Jarvis's".
+_WAKE = re.compile(r"^\s*(?:hey|hi|ok|okay|hello)?[\s,]*j[ae]r?vis(?:'s)?\b[\s,.!?:;-]*", re.IGNORECASE)
+MAX_SPOKEN_CHARS = 600
+
+
+def _speakable(reply: str) -> str:
+    """A reply trimmed for the ear: no links or table marks, and short."""
+    text = " ".join(re.sub(r"https?://\S+|[|#*_`]", " ", reply).split())
+    if len(text) <= MAX_SPOKEN_CHARS:
+        return text
+    return text[:MAX_SPOKEN_CHARS].rsplit(" ", 1)[0] + ". The rest is in the message."
+
+
+# Buttons shown under the message box. Without a brain each is a command; with one, the label is the request.
+BUTTONS = {"News PDF": "/paper", "Market briefing": "/brief", "Where to invest": "/invest",
+           "Stocks to watch": "/screen india", "My applications": "/status", "Go to sleep": "/sleep"}
+_KEYBOARD = {"keyboard": [[{"text": "News PDF"}, {"text": "Market briefing"}],
+                          [{"text": "Where to invest"}, {"text": "Stocks to watch"}],
+                          [{"text": "My applications"}, {"text": "Go to sleep"}]],
+             "resize_keyboard": True, "is_persistent": True}
+PUBLISH_CHOICES = {"Publish public": "/publish public", "Upload private": "/publish private", "Skip": "/skip"}
+_INVEST_WHEN = {"one time": False, "once": False, "lump sum": False, "every month": True, "monthly": True}
+_CAN_DO = ("I can give you the market briefing, suggest where to invest a sum, send the news as a PDF, "
+           "find jobs for a role, and show your applications or your channel.")
+POWEROFF_REQUEST = "poweroff.request"  # watched by a root-owned systemd unit on the server install
+
+
+def _asleep_flag():
+    return paths.home() / "asleep"
+
+
 _SPOKEN = (
+    (re.compile(r"^(?:please )?(?:go (?:back )?to sleep|sleep(?: now)?|good ?night|stand by|that is all|that's all)\b.*",
+                re.IGNORECASE), "/sleep"),
+    (re.compile(r"^(?:please )?(?:wake up|wake|are you there|are you awake)\b.*", re.IGNORECASE), "/wake"),
+    (re.compile(r"^(?:please )?(?:shut ?down|power ?off|switch off|turn off)\b.*", re.IGNORECASE), "/shutdown"),
+    (re.compile(r"^.*\b(?:pdf|newspaper|paper|edition|news)\b.*$", re.IGNORECASE), "/paper"),
+    # Money questions come first: "give me the brief and tell me where to invest 25k" is about investing.
+    (re.compile(r"^(.*\b(?:invest(?:ing|ment)?|put (?:my |the |some )?money|stocks? to (?:buy|invest|put))\b.*)$",
+                re.IGNORECASE), "/invest {0}"),
+    (re.compile(r"^(.*\b(?:stocks?|shares?|what (?:should|can|do) i buy|recommend(?:ation)?s?|portfolio|mutual funds?|sip)\b.*)$",
+                re.IGNORECASE), "/invest {0}"),
     (re.compile(r"^(?:give me |send |get )?(?:the |my |a )?(?:market |morning |daily )?brief(?:ing)?\b.*", re.IGNORECASE), "/brief"),
+    (re.compile(r"^.*\b(?:markets?|nifty|sensex|indices|index|dow|nasdaq|rupee|gold price)\b.*$", re.IGNORECASE), "/brief"),
+    (re.compile(r"^.*\b(?:my )?applications?\b.*$", re.IGNORECASE), "/status"),
     (re.compile(r"^(?:show |get )?(?:my )?(?:application )?status\b.*", re.IGNORECASE), "/status"),
     (re.compile(r"^(?:find|search|look for)(?: me)?(?: some)? (?:jobs? (?:for|as) )?(.+?)(?: jobs?)?$", re.IGNORECASE), "/jobs {0}"),
     (re.compile(r"^screen (india|us|etf)\b.*", re.IGNORECASE), "/screen {0}"),
     (re.compile(r"^(?:how is |how's |show )?my (?:youtube )?channel\b.*", re.IGNORECASE), "/channel"),
+    (re.compile(r"^.*\b(?:youtube|channel|views|subscribers)\b.*$", re.IGNORECASE), "/channel"),
+    (re.compile(r"^.*\bjobs?\b.*$", re.IGNORECASE), "/jobs"),
     (re.compile(r"^help\b.*", re.IGNORECASE), "/help"),
 )
 
 
-def _spoken_to_command(text: str) -> str:
-    """Map a transcribed sentence onto a command. /apply and /confirm are never reachable by voice."""
+_CONTROL = ("/sleep", "/wake", "/shutdown")
+
+
+def _spoken_to_command(text: str, *, control_only: bool = False) -> str:
+    """Map a transcribed sentence onto a command. /apply and /confirm are never reachable by voice.
+
+    With a conversational brain only the control phrases (sleep, wake, power off) are mapped;
+    everything else is left as a sentence for the brain, which is what makes it a conversation.
+    """
     cleaned = text.strip().rstrip(".!?").lstrip("/")
     for pattern, command in _SPOKEN:
+        if control_only and command not in _CONTROL:
+            continue
         found = pattern.match(cleaned)
         if found:
             return command.format(*(g.strip() for g in found.groups()))
@@ -293,10 +725,23 @@ class Bot:
             raise TelegramError(f"Telegram {method} was rejected (HTTP {response.status_code})")
         return payload
 
-    def send(self, text: str) -> None:
+    def send(self, text: str, *, buttons: bool = False, choices: list[str] | None = None) -> None:
         for start in range(0, len(text) or 1, 4000):
-            self._call("sendMessage", json={"chat_id": self._owner, "text": text[start:start + 4000] or "(empty)",
-                                            "disable_web_page_preview": True})
+            payload = {"chat_id": self._owner, "text": text[start:start + 4000] or "(empty)",
+                       "disable_web_page_preview": True}
+            if choices:  # answer buttons for a question; the main buttons come back with the next reply
+                payload["reply_markup"] = {"keyboard": [[{"text": c} for c in choices]], "resize_keyboard": True,
+                                           "one_time_keyboard": True}
+            elif buttons:
+                payload["reply_markup"] = _KEYBOARD
+            self._call("sendMessage", json=payload)
+
+    def _typing(self) -> None:
+        """Show "typing..." while the answer is prepared. Cosmetic: a failure here must not stop the reply."""
+        try:
+            self._call("sendChatAction", json={"chat_id": self._owner, "action": "typing"})
+        except TelegramError:
+            pass
 
     def skip_backlog(self) -> None:
         """Drop everything sent while the bot was not running: stale commands must not fire on start."""
@@ -318,24 +763,59 @@ class Bot:
         self._recent.append(now)
         return len(self._recent) > RATE_LIMIT
 
-    def _voice_text(self, voice: dict) -> str:
-        if int(voice.get("duration") or 0) > MAX_VOICE_SECONDS or int(voice.get("file_size") or 0) > MAX_VOICE_BYTES:
-            raise ValueError(f"voice notes are limited to {MAX_VOICE_SECONDS} seconds")
-        path = self._call("getFile", json={"file_id": voice["file_id"]})["result"].get("file_path", "")
+    def _download(self, file_id: str, max_bytes: int) -> bytes:
+        path = self._call("getFile", json={"file_id": file_id})["result"].get("file_path", "")
         if not re.fullmatch(r"[\w/.-]{1,200}", path) or ".." in path:
             raise ValueError("unexpected file path from Telegram")
         try:
             response = self._client.get(f"{API}/file/bot{self._token}/{path}")
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise TelegramError(f"voice download failed ({type(exc).__name__})") from None
-        if len(response.content) > MAX_VOICE_BYTES:
-            raise ValueError("voice note is too large")
+            raise TelegramError(f"download failed ({type(exc).__name__})") from None
+        if len(response.content) > max_bytes:
+            raise ValueError("file is too large")
+        return response.content
+
+    def _voice_text(self, voice: dict) -> str:
+        if int(voice.get("duration") or 0) > MAX_VOICE_SECONDS or int(voice.get("file_size") or 0) > MAX_VOICE_BYTES:
+            raise ValueError(f"voice notes are limited to {MAX_VOICE_SECONDS} seconds")
+        audio = self._download(voice["file_id"], MAX_VOICE_BYTES)
         if self._transcribe is None:
             from jarvis_sidekick.speech.elevenlabs_stt import ElevenLabsSpeechBackend
 
-            return ElevenLabsSpeechBackend().transcribe(response.content, format="ogg").text
-        return self._transcribe(response.content)
+            return ElevenLabsSpeechBackend().transcribe(audio, format="ogg").text
+        return self._transcribe(audio)
+
+    def _save_resume(self, document: dict) -> str:
+        """Store a PDF or DOCX the owner sent as the resume to apply with. Checked by content, not by name."""
+        if int(document.get("file_size") or 0) > MAX_RESUME_BYTES:
+            raise ValueError("resumes are limited to 5 MB")
+        data = self._download(document["file_id"], MAX_RESUME_BYTES)
+        if data.startswith(b"%PDF-"):
+            suffix = ".pdf"
+        elif data.startswith(b"PK\x03\x04") and str(document.get("file_name", "")).lower().endswith(".docx"):
+            suffix = ".docx"
+        else:
+            raise ValueError("send the resume as a PDF or a .docx file")
+        target = paths.home() / f"resume{suffix}"
+        staged = paths.home() / f"incoming-resume{suffix}"  # keeps the real suffix so it is parsed as that type
+        staged.write_bytes(data)
+        staged.chmod(0o600)
+        try:
+            from jarvis_sidekick import resume
+
+            profile = resume.load(staged)
+            if not (profile.name and profile.email):
+                raise ValueError("could not find a name and an email in it; the old resume is kept")
+        except (ValueError, RuntimeError, OSError):
+            staged.unlink(missing_ok=True)
+            raise
+        for old in ("resume.pdf", "resume.docx"):
+            (paths.home() / old).unlink(missing_ok=True)
+        staged.replace(target)
+        return (f"Resume saved. Name, email{', phone' if profile.phone else ''} found; "
+                f"{len(profile.skills)} skills recognised: {', '.join(profile.skills[:12])}"
+                f"{' ...' if len(profile.skills) > 12 else ''}")
 
     def process(self, update: dict) -> None:
         message = update.get("message")
@@ -346,6 +826,27 @@ class Bot:
         if self._rate_limited():
             self.send("Slow down: too many messages this minute.")
             return
+        document = message.get("document") if isinstance(message.get("document"), dict) else None
+        video = message.get("video") if isinstance(message.get("video"), dict) else None
+        if video is None and document and str(document.get("mime_type", "")).startswith("video/"):
+            video, document = document, None
+        if video:
+            try:
+                if int(video.get("file_size") or 0) > publish.MAX_VIDEO_BYTES:
+                    raise ValueError("Telegram lets a bot download at most 20 MB; this video is larger")
+                data = self._download(video["file_id"], publish.MAX_VIDEO_BYTES)
+                self._commander.choices = []
+                reply = self._commander.video_received(data, str(message.get("caption") or ""))
+                self.send(reply, choices=self._commander.choices)
+            except (TelegramError, ValueError, RuntimeError, OSError) as exc:
+                self.send(f"Could not use that video: {exc}")
+            return
+        if document:
+            try:
+                self.send(self._save_resume(document))
+            except (TelegramError, ValueError, RuntimeError, OSError) as exc:
+                self.send(f"Could not use that file: {exc}")
+            return
         spoken = isinstance(message.get("voice"), dict)
         try:
             text = self._voice_text(message["voice"]) if spoken else str(message.get("text") or "")
@@ -354,16 +855,29 @@ class Bot:
             return
         if spoken:
             self.send(f"Heard: {text}")
-        reply = self._commander.handle(text, spoken=spoken)
-        self.send(reply)
+        self._typing()
+        answer = self._commander.exchange(text, spoken=spoken)
+        self.send(answer.reply, choices=answer.choices,
+                  buttons=answer.had_choices or text.strip().lower().split("@")[0] in ("/start", "/help"))
+        self._send_attachment(answer.attachment)
+        if answer.action:
+            answer.action()
+            return
         if spoken and self._speak:
-            self._say(reply)
+            self._say(answer.say)
+
+    def _send_attachment(self, attachment: Path | None = None) -> None:
+        attachment = attachment or self._commander.take_attachment()
+        if attachment is None:
+            return
+        self._call("sendDocument", data={"chat_id": str(self._owner)},
+                   files={"document": (attachment.name, attachment.read_bytes(), "application/pdf")})
 
     def _say(self, reply: str) -> None:
         from jarvis_sidekick.speech.elevenlabs_say import synthesize
 
         try:
-            audio = synthesize(re.sub(r"https?://\S+|[|#*_`]", " ", reply))
+            audio = synthesize(_speakable(reply))
             self._call("sendAudio", data={"chat_id": str(self._owner), "title": "Jarvis"},
                        files={"audio": ("reply.mp3", audio, "audio/mpeg")})
         except (RuntimeError, ValueError) as exc:
@@ -386,10 +900,21 @@ class Bot:
 
     def run(self) -> None:
         self.skip_backlog()
-        self.send("Jarvis sidekick is online. /help lists commands.")
+        (paths.home() / POWEROFF_REQUEST).unlink(missing_ok=True)
+        state = " I am asleep; say Jarvis to wake me." if self._commander.asleep else ""
+        self.send(f"{self._commander.greeting()}, {self._commander.title}. Jarvis is online.{state} /help lists commands.",
+                  buttons=True)
         while True:
             try:
-                self.poll_once()
+                # While a YouTube sign-in is pending, check on it every few seconds instead of every 50.
+                self.poll_once(timeout=4 if self._commander.youtube_login else 50)
+                outcome = self._commander.youtube_poll()
+                if outcome:
+                    self.send(outcome, buttons=True)
+                if self._commander.morning_due():
+                    self._typing()
+                    self.send(self._commander.morning_message())
+                    self._send_attachment()
             except TelegramError as exc:
                 logger.warning("%s; retrying in 10s", exc)
                 time.sleep(10)
@@ -400,6 +925,25 @@ def from_env(*, speak: bool = False) -> Bot:
         resume_path=os.environ.get("SIDEKICK_RESUME", ""),
         locations=os.environ.get("SIDEKICK_LOCATIONS", ""),
         channel_id=os.environ.get("SIDEKICK_YOUTUBE_CHANNEL", ""),
-        agent=jarvis_agent(),
+        title=os.environ.get("SIDEKICK_TITLE", "").strip()[:30] or "Master",
+        timezone=os.environ.get("SIDEKICK_TIMEZONE", "").strip(),
+        allow_poweroff=os.environ.get("SIDEKICK_ALLOW_POWEROFF") == "1",
+        morning=os.environ.get("SIDEKICK_MORNING", "").strip(),
     )
-    return Bot(os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", ""), commander, speak=speak)
+    from jarvis_sidekick import brain as brain_module
+
+    commander.brain = brain_module.from_env(
+        title=commander.title, now=commander.now, resume_path=commander.resume_path,
+        channel_id=commander.channel_id, locations=commander.locations,
+    )
+    commander.agent = commander.brain.ask if commander.brain else jarvis_agent()
+    bot = Bot(os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", ""), commander, speak=speak)
+    port = os.environ.get("SIDEKICK_WEB_PORT", "").strip()
+    if port:
+        from jarvis_sidekick import web
+
+        if not port.isdigit() or not 1024 <= int(port) <= 65535:
+            raise ValueError("SIDEKICK_WEB_PORT must be a port number between 1024 and 65535")
+        web.serve(web.from_env(commander, bot.send), int(port))
+        logger.info("Jarvis screen listening on http://127.0.0.1:%s", port)
+    return bot

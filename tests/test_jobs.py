@@ -122,6 +122,14 @@ def test_adzuna_needs_keys_and_searches_every_requested_country(monkeypatch):
         sources.adzuna("data engineer", countries=("xx",))
 
 
+@respx.mock
+def test_arbeitnow_accepts_a_page_larger_than_the_default_cap():
+    big = {"data": [{"title": "Engineer", "url": "https://a.example/1", "description": "x" * 6_000_000}]}
+    respx.get("https://www.arbeitnow.com/api/job-board-api").mock(return_value=httpx.Response(200, json=big))
+    (job,) = sources.arbeitnow("engineer")
+    assert job.title == "Engineer"
+
+
 def test_several_acceptable_places(resume_file):
     profile = resume.load(resume_file)
     where = "India, Singapore, remote"

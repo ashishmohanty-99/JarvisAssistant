@@ -77,7 +77,8 @@ def remotive(query: str, client: httpx.Client | None = None, **_: Any) -> list[J
 
 
 def arbeitnow(query: str, client: httpx.Client | None = None, **_: Any) -> list[Job]:
-    data = _http.get_json("https://www.arbeitnow.com/api/job-board-api", client=client)
+    # One page of this board is larger than the default 5 MB cap.
+    data = _http.get_json("https://www.arbeitnow.com/api/job-board-api", max_bytes=30_000_000, client=client)
     return [
         Job(
             source="arbeitnow",

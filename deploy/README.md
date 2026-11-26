@@ -16,24 +16,56 @@ This installs a login service (`launchd`) that starts the bot when you log in an
 - `sidekick voice` (microphone and speakers) works only here, on the Mac. From the iPad and phone you use the Telegram bot.
 - The first `jobs apply` needs `playwright install chromium`.
 
-## On a cloud server (later)
+## On a cloud server
 
-A small Linux server is enough: 2 vCPU, 4 GB memory, 20 GB disk, Ubuntu LTS.
+A small Linux server is enough: Ubuntu 24.04, 2 GB of memory or more. Everything can be done from a browser or an SSH app on a tablet.
 
-1. Lock the server down before anything else: SSH keys only (`PasswordAuthentication no`), a firewall that allows inbound SSH and nothing else (`ufw default deny incoming; ufw allow OpenSSH; ufw enable`), automatic security updates (`unattended-upgrades`).
-2. Install Docker, then clone this repository.
-3. Put your settings in `/etc/jarvis-sidekick/env` (same keys as `.env.example`), owned by root, `chmod 600`.
-4. `docker compose -f deploy/cloud/docker-compose.yml up -d --build`
-5. Copy your resume into the data volume:
-   `docker compose -f deploy/cloud/docker-compose.yml cp ~/resume.pdf bot:/data/resume.pdf`
+```bash
+git clone https://github.com/ashishmohanty-99/JarvisAssistant
+cd JarvisAssistant
+deploy/cloud/install.sh
+nano /etc/jarvis-sidekick/env        # fill in the three keys at the top
+systemctl restart jarvis-sidekick
+journalctl -u jarvis-sidekick -n 20
+```
 
-The container runs as an unprivileged user with a read-only filesystem, no Linux capabilities and no published ports.
+Then send your resume PDF to the bot in Telegram, and send `/doctor`.
 
-Run the bot in one place at a time. Two copies with the same token take turns stealing each other's messages. When you move to the server, stop the Mac service first.
+What the installer does:
+- Turns on a firewall that allows inbound SSH and nothing else, bans addresses after repeated failed logins, and enables automatic security updates.
+- Installs the program under `/opt/jarvis-sidekick` and the browser used for application forms.
+- Creates `/etc/jarvis-sidekick/env`, readable by root only, for your keys.
+- Runs the bot as a system service under an account with no login and no privileges. The service can write only to `/var/lib/jarvis-sidekick`, where your resume, application packets and history live.
 
-What changes on a server:
+To update later: `cd JarvisAssistant && git pull && deploy/cloud/install.sh`.
+
+Day to day:
+
+| To | Run |
+|---|---|
+| see what the bot is doing | `journalctl -u jarvis-sidekick -f` |
+| change a setting | `nano /etc/jarvis-sidekick/env`, then `systemctl restart jarvis-sidekick` |
+| stop it | `systemctl stop jarvis-sidekick` |
+
+Pausing and powering off, from Telegram:
+
+| Say or type | What happens | To bring it back |
+|---|---|---|
+| "Jarvis, go to sleep" or `/sleep` | The bot stops answering. The server keeps running. | Say "Jarvis" |
+| `/shutdown` (typed only) | The server powers off. | Power it on in your provider's control panel; the bot starts by itself and messages you |
+
+A powered-off server cannot hear a message, so starting it always happens at the provider. Most providers, DigitalOcean included, keep charging for a server that is powered off, because its disk and address stay reserved; billing stops only when the server is destroyed.
+
+What a server cannot do:
 - No microphone, so no `sidekick voice`. Voice notes through Telegram work the same.
-- Free-form questions need OpenJarvis and a model. A 4 GB server is too small for a useful local model; either point OpenJarvis at a cloud model (its `inference-cloud` extra and your own API key) or use only the slash commands, which need no model.
-- Your resume and application history now live on that server. Use a provider and region you are comfortable with, and keep disk encryption on.
+- Free-form questions need OpenJarvis and a model, which this install leaves out. The slash commands and voice-note commands need neither.
 
-The Dockerfile and compose file were written without a Docker daemon to build them on. Expect to adjust on the first build.
+Run the bot in one place at a time. Two copies with the same token take turns stealing each other's messages.
+
+Your resume and application history live on that server: choose a provider and region you are comfortable with, use a long unique password or an SSH key for it, and turn on two-factor sign-in for the provider account.
+
+The installer and the restricted service have been run on a live Ubuntu 24.04 server (2 GB).
+
+### Docker instead
+
+`deploy/cloud/Dockerfile` and `docker-compose.yml` do the same job in a container (unprivileged user, read-only filesystem, no ports). They were written without a Docker daemon to build them on, so expect to adjust on the first build. Put settings in `/etc/jarvis-sidekick/env` and run `docker compose -f deploy/cloud/docker-compose.yml up -d --build`.

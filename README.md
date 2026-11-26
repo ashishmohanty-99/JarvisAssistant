@@ -37,6 +37,41 @@ sidekick voice-setup               # points OpenJarvis speech at ElevenLabs, bot
 
 Most commands also work without OpenJarvis (`pip install -e ".[resume,apply]"`): jobs, brief, screen, plan, hustle, scrape, transcribe. Voice chat and `sidekick jarvis ...` need it.
 
+## The Jarvis screen
+
+A graphical, talking page for a tablet or phone: an orb you hold to speak, spoken answers, tap buttons, and a live board of markets and headlines. It is reachable only over a private network you set up, and signing in needs a code sent to your Telegram. Setup: [deploy/WEB.md](deploy/WEB.md).
+
+## The news as a PDF
+
+`/paper` in the bot (or the **News PDF** button, or "Jarvis, send me the news"), and `sidekick paper -o brief.pdf` on the command line, produce *The Jarvis Brief*: a three-page A4 morning edition with a one-sentence summary, a tile for each index with its trend line, the day's headlines for India and the world with a short summary and a tappable link, a table of where a sum of money could go (funds and stock ideas with units at today's prices, using the amount and risk you last gave `/invest`, or Rs 25,000 at moderate risk until you do), the biggest rises and falls, the momentum screen, and your own numbers. Set `SIDEKICK_MORNING=07:30` to have it arrive every morning.
+
+It is laid out in HTML and printed by the Chromium that is already installed. Headlines and summaries come straight from the news feeds: nothing is rewritten or invented, and a story with no summary in its feed simply shows its headline.
+
+## One-tap YouTube publishing
+
+Send the bot a video with its title and description, check the summary, tap **Publish public**. Setup on the Google side and what to expect: [deploy/YOUTUBE.md](deploy/YOUTUBE.md).
+
+## Where to put a sum of money
+
+```bash
+/invest                 # in the bot: asks the amount, one time or monthly, and your risk comfort, with buttons
+/invest 25000 once moderate
+```
+
+Or say it: "Jarvis, where should I invest 25 thousand?" No language model is involved. The split comes from fixed percentages per risk level (index ETFs, gold, a debt fund, and a minority in stock ideas), the stock ideas from the top of the momentum screen (steady uptrends only, nothing overbought), and the quantities from the latest prices, in whole units. It tells you what one unit costs, what is left over, and what it could not fetch. It is a starting point for your own research: it does not know your debts, taxes, holdings or goals, and it cannot promise a return.
+
+## Conversation
+
+With a Claude API key (`ANTHROPIC_API_KEY`) the bot stops being a list of commands. Say "Jarvis, how did the market do and what looks worth researching?" and it fetches the data it needs, answers in a few spoken-length sentences, asks a follow-up when the next step depends on you, and remembers the thread. It also keeps short notes on what you tell it about yourself (horizon, monthly amount, risk comfort); `/memory` shows them and `/forget` wipes them along with the conversation.
+
+- Model: `claude-opus-5-5` by default; set `SIDEKICK_MODEL` to change it. Each message is a paid API call; a limit of 150 conversations a day is built in.
+- Every tool the model has reads: market data, quotes, the screen, the plan calculator, job search, your application list, your channel, a web page, web search. It cannot apply for a job, power anything off or run a command; those stay typed slash commands.
+- If a safety classifier declines a request, the API's server-side fallback lets another Claude model answer in the same call.
+- Your messages, your notes and the tool results go to Anthropic's API to produce the answer. The conversation and notes are also stored on your machine in `~/.jarvis-sidekick/`, readable only by the bot's account.
+- `SIDEKICK_MORNING=07:30` sends a morning greeting and briefing every day at that time.
+
+Without a key everything else still works, as commands.
+
 ## Check your setup
 
 ```bash
@@ -127,7 +162,7 @@ Supported forms: Greenhouse and Lever. LinkedIn, Indeed and Naukri are not autom
 
 ## Markets: what it is and is not
 
-Prices come from Yahoo's chart endpoint with Stooq as a fallback. Both are free, keyless, delayed, and unofficial. The screen ranks a watchlist by 3 and 6 month return per unit of volatility, with a penalty below the 200-day average: a well-known momentum factor that says what has been rising steadily, not what will. It ignores valuation and earnings. The plan is rule-based general education for an India-based investor. None of this is personalised investment advice, and nothing here can promise a profit. Edit the watchlists in `markets/data.py`.
+Prices come from Yahoo's chart endpoint: free, keyless, delayed, and unofficial, with no second source behind it. The screen ranks a watchlist by 3 and 6 month return per unit of volatility, with a penalty below the 200-day average: a well-known momentum factor that says what has been rising steadily, not what will. It ignores valuation and earnings. The plan is rule-based general education for an India-based investor. None of this is personalised investment advice, and nothing here can promise a profit. Edit the watchlists in `markets/data.py`.
 
 ## "Scrape the entire internet"
 
@@ -135,9 +170,11 @@ Nobody can. The working pattern is: search for what you need (OpenJarvis `web_se
 
 ## Verified, and not yet
 
-Verified by the test suite (`pytest`, 100 tests): the ElevenLabs request format and response parsing against the documented API shape; registration into a real OpenJarvis install and resolution through its speech discovery and tool executor; the form filler against a real Chromium and a local stand-in form (dry run sends nothing, confirm sends, unanswered questions and CAPTCHAs block); scoring, tracker, indicators, plan arithmetic, feed parsing, error paths that must not leak keys; the bot's owner check, backlog skip, rate limit, voice-note limits and one-time confirmation codes.
+Verified by the test suite (`pytest`, 205 tests): the ElevenLabs request format and response parsing against the documented API shape; registration into a real OpenJarvis install and resolution through its speech discovery and tool executor; the form filler against a real Chromium and a local stand-in form (dry run sends nothing, confirm sends, unanswered questions and CAPTCHAs block); scoring, tracker, indicators, plan arithmetic, feed parsing, error paths that must not leak keys; the bot's owner check, backlog skip, rate limit, voice-note limits and one-time confirmation codes.
 
-Not yet run against the live services, because the build environment had no access to them: ElevenLabs, the job APIs, Yahoo/Stooq, the news feeds, YouTube, Telegram, and real Greenhouse/Lever pages. The macOS service script and the Docker files were written without a Mac or a Docker daemon to run them on. Response parsers follow each provider's published shape; expect small fixes on first live run. See `PLAN.md`.
+Run live on an Ubuntu 24.04 cloud server through `/doctor` (19 November 2026): the Telegram bot under its restricted system service, resume upload through the bot, ElevenLabs speech out and back in, Yahoo prices, the news feeds, the Remotive, Arbeitnow and RemoteOK job sources, the YouTube channel feed, and Chromium start-up.
+
+Not yet run live: Adzuna, the Greenhouse and Lever job boards and their real application forms, the GitHub profile reader, the page reader, voice chat through OpenJarvis with a model, the macOS service script, and the Docker files. Expect small fixes on their first run.
 
 ## Develop
 
